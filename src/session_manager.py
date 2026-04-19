@@ -184,7 +184,12 @@ class SessionManager:
         session_id = result["session_id"]
         devin_url = result["url"]
 
-        await observability.record_session(
+        # record_session returns False if another concurrent webhook delivery
+        # already claimed this issue (via the partial unique index on
+        # (issue_number, repo_full_name)). When that happens Devin has
+        # returned the same session_id thanks to our idempotency_key, so we
+        # just skip the first-touch GitHub comment to avoid posting twice.
+        inserted = await observability.record_session(
             session_id=session_id,
             issue_number=issue_number,
             issue_title=issue_title,
@@ -192,6 +197,13 @@ class SessionManager:
             repo_full_name=repo_full_name,
             devin_session_url=devin_url,
         )
+
+        if not inserted:
+            logger.info(
+                "Duplicate webhook delivery for issue #%d — skipping first-touch comment",
+                issue_number,
+            )
+            return session_id
 
         await self.github.post_comment(
             owner=owner,

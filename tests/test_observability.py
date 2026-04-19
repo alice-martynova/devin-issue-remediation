@@ -31,7 +31,7 @@ async def test_record_and_get_session(db):
     assert active["pr_merged"] == 0
 
 
-async def test_record_session_is_idempotent(db):
+async def test_record_session_returns_true_on_insert_false_on_duplicate(db):
     kwargs = dict(
         session_id="sess-1",
         issue_number=42,
@@ -40,12 +40,61 @@ async def test_record_session_is_idempotent(db):
         repo_full_name="r/r",
         devin_session_url="https://example",
     )
-    await observability.record_session(**kwargs)
-    # Second call with same session_id must not raise
-    await observability.record_session(**kwargs)
+    assert await observability.record_session(**kwargs) is True
+    # Second call with same session_id is a no-op
+    assert await observability.record_session(**kwargs) is False
 
     all_sessions = await observability.get_all_sessions()
     assert len([s for s in all_sessions if s["session_id"] == "sess-1"]) == 1
+
+
+async def test_partial_unique_index_blocks_duplicate_active_session(db):
+    """A second active session for the same issue (different session_id)
+    must be rejected by the partial unique index."""
+    await observability.record_session(
+        session_id="sess-A",
+        issue_number=1,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+        devin_session_url="https://example",
+    )
+    # Racing webhook: different session_id, same issue — must NOT insert.
+    inserted = await observability.record_session(
+        session_id="sess-B",
+        issue_number=1,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+        devin_session_url="https://example",
+    )
+    assert inserted is False
+    all_sessions = await observability.get_all_sessions()
+    assert {s["session_id"] for s in all_sessions} == {"sess-A"}
+
+
+async def test_new_session_allowed_after_previous_one_terminated(db):
+    """Once a session reaches a terminal status, a new active session for
+    the same issue should be creatable (e.g. issue reopened)."""
+    await observability.record_session(
+        session_id="sess-A",
+        issue_number=1,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+        devin_session_url="https://example",
+    )
+    await observability.update_session("sess-A", "finished")
+
+    inserted = await observability.record_session(
+        session_id="sess-B",
+        issue_number=1,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+        devin_session_url="https://example",
+    )
+    assert inserted is True
 
 
 async def test_update_session_sets_status_and_pr(db):
@@ -99,3 +148,26 @@ async def test_get_session_by_pr_number(db):
 
     missing = await observability.get_session_by_pr_number(999, "r/r")
     assert missing is None
+
+
+async def test_failed_webhook_round_trip(db):
+    await observability.record_failed_webhook(
+        handler="handle_issue_opened",
+        context={"issue_number": 42, "repo_full_name": "r/r"},
+        error="httpx.HTTPError: boom",
+    )
+    rows = await observability.get_failed_webhooks()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["handler"] == "handle_issue_opened"
+    assert row["context"] == {"issue_number": 42, "repo_full_name": "r/r"}
+    assert "boom" in row["error"]
+
+
+async def test_failed_webhooks_returned_newest_first(db):
+    for i in range(3):
+        await observability.record_failed_webhook(
+            handler=f"h{i}", context={"i": i}, error="x"
+        )
+    rows = await observability.get_failed_webhooks()
+    assert [r["handler"] for r in rows] == ["h2", "h1", "h0"]

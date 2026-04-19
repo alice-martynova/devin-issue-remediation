@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src import observability
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -143,3 +145,56 @@ class TestWebhookRouting:
         )
         assert resp.status_code == 202
         assert resp.json()["status"] == "ignored"
+
+
+class TestSafeRun:
+    async def test_records_failed_webhook_on_exception(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(observability, "DB_PATH", str(tmp_path / "s.db"))
+        await observability.init_db()
+
+        from src.main import _safe_run
+
+        async def boom():
+            raise RuntimeError("kaboom")
+
+        await _safe_run("h", boom(), {"issue_number": 1})
+
+        rows = await observability.get_failed_webhooks()
+        assert len(rows) == 1
+        assert rows[0]["handler"] == "h"
+        assert rows[0]["context"] == {"issue_number": 1}
+        assert "kaboom" in rows[0]["error"]
+
+    async def test_no_record_on_success(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(observability, "DB_PATH", str(tmp_path / "s.db"))
+        await observability.init_db()
+
+        from src.main import _safe_run
+
+        async def ok():
+            return None
+
+        await _safe_run("h", ok(), {})
+        assert await observability.get_failed_webhooks() == []
+
+
+class TestFailedWebhooksEndpoint:
+    async def test_returns_failed_webhooks(self, tmp_path, monkeypatch):
+        from httpx import ASGITransport, AsyncClient
+
+        from src import main as main_module
+
+        monkeypatch.setattr(observability, "DB_PATH", str(tmp_path / "s.db"))
+        await observability.init_db()
+        await observability.record_failed_webhook(
+            "handle_issue_opened", {"issue_number": 5}, "boom"
+        )
+
+        transport = ASGITransport(app=main_module.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/failed_webhooks")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["handler"] == "handle_issue_opened"
+        assert data[0]["context"] == {"issue_number": 5}
