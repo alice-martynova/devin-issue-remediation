@@ -144,6 +144,13 @@ Instructions:
    <test output>
    ```
 
+Asking for input: If at any point you need information from the issue reporter or a human reviewer \
+(ambiguous requirements, missing credentials, a design decision between valid approaches, etc.), \
+post your specific question as a comment on GitHub issue #{issue_number} using the GitHub \
+integration. The reporter is only notified when you comment on the issue — do not wait silently in \
+this session. Phrase the question so it can be answered inline. When they reply, their comment will \
+be relayed back into this session automatically and you can continue from where you stopped.
+
 Important: Only modify the code necessary to address this specific issue.
 """
 
