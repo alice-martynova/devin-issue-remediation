@@ -144,12 +144,17 @@ Instructions:
    <test output>
    ```
 
-Asking for input: If at any point you need information from the issue reporter or a human reviewer \
-(ambiguous requirements, missing credentials, a design decision between valid approaches, etc.), \
-post your specific question as a comment on GitHub issue #{issue_number} using the GitHub \
-integration. The reporter is only notified when you comment on the issue — do not wait silently in \
-this session. Phrase the question so it can be answered inline. When they reply, their comment will \
-be relayed back into this session automatically and you can continue from where you stopped.
+Asking for input: If at any point you need a human decision before you can continue — including \
+ambiguous requirements, missing credentials, a design choice between valid approaches, the issue \
+appearing to already be fixed / a duplicate / not reproducible, or any other precondition in this \
+prompt turning out to be false — you MUST post your specific question as a comment on GitHub issue \
+#{issue_number} using the GitHub integration, and then wait for the reply there. Do NOT ask the \
+question by sending a message in this Devin session (message_user, block_on_user, user_question, \
+etc.) — the issue reporter does not see this session's chat and will not be notified. The reporter \
+is only notified when you comment on the issue — do not wait silently in this session. Phrase the \
+question so it can be answered inline, and include any relevant evidence (file paths, commit SHAs, \
+links) so the reviewer has full context. When they reply, their comment will be relayed back into \
+this session automatically and you can continue from where you stopped.
 
 Important: Only modify the code necessary to address this specific issue.
 """

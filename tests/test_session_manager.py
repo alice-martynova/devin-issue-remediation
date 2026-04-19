@@ -112,3 +112,17 @@ class TestBuildDevinPrompt:
         assert "issue #42" in prompt
         assert "do not wait silently" in prompt
         assert "relayed back into this session" in prompt
+
+    def test_forbids_asking_via_session_chat(self):
+        """The reporter only sees GitHub issue comments — blocking in the
+        Devin session UI (message_user / block_on_user) silently strands the
+        session, so the prompt must explicitly forbid that path."""
+        prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
+        assert "Do NOT ask the question by sending a message in this Devin session" in prompt
+        assert "message_user" in prompt
+
+    def test_covers_duplicate_or_already_fixed_case(self):
+        """'Asking for input' must cover cases where the issue appears already
+        resolved or a duplicate — not just ambiguous requirements."""
+        prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
+        assert "already be fixed" in prompt or "duplicate" in prompt
