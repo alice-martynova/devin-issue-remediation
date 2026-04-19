@@ -239,8 +239,12 @@ Sessions are archived off the **Current** tab once their PR is merged or the iss
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
+├── requirements-dev.txt   # Test + lint dependencies
+├── pyproject.toml         # pytest + ruff config
 ├── .env.example
 ├── context.example.txt    # Template for Devin project context (copy to context.txt)
+├── .github/workflows/
+│   └── ci.yml             # Runs ruff + pytest on every PR
 ├── src/
 │   ├── main.py            # FastAPI app, webhook handler
 │   ├── devin_client.py    # Devin API wrapper
@@ -248,6 +252,17 @@ Sessions are archived off the **Current** tab once their PR is merged or the iss
 │   ├── session_manager.py # Orchestration + Devin prompt builder
 │   ├── observability.py   # SQLite session store + metrics
 │   └── retry.py           # HTTP retry helper
-└── templates/
-    └── dashboard.html     # Status dashboard
+├── templates/
+│   └── dashboard.html     # Status dashboard
+└── tests/                 # Unit tests — run with `pytest`
 ```
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest
+```
+
+CI (`.github/workflows/ci.yml`) runs both on every PR and push to `main`.
