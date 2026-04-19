@@ -176,7 +176,7 @@
       <div class="sub">actively processing</div>
     </div>
     <div class="card yellow">
-      <div class="label">GitHub User Action</div>
+      <div class="label">User Action</div>
       <div class="value">{{ cnt_user_action }}</div>
       <div class="sub">comment on issue or review PR</div>
     </div>
@@ -201,7 +201,7 @@
         <option value="">All statuses</option>
         <option value="issue-opened">Issue Opened</option>
         <option value="devin-working">Devin Working</option>
-        <option value="user-action">GitHub User Action</option>
+        <option value="user-action">User Action</option>
       </select>
       <span id="cur-count" class="filter-count"></span>
     </div>
@@ -233,7 +233,7 @@
           {% set status_label   = 'Devin Working' %}
         {% else %}
           {% set display_status = 'user-action' %}
-          {% set status_label   = 'GitHub User Action' %}
+          {% set status_label   = 'User Action' %}
         {% endif %}
 
         <tr data-status="{{ display_status }}"
