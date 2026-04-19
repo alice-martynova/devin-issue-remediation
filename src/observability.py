@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from datetime import datetime
@@ -40,6 +41,26 @@ async def init_db() -> None:
                 await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {definition}")
             except Exception:
                 pass  # column already exists
+
+        # Prevent duplicate active sessions for the same issue. Allow new
+        # sessions to be created once a prior one terminates (e.g. issue
+        # reopened after a PR was closed without merging).
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_session_per_issue
+            ON sessions (issue_number, repo_full_name)
+            WHERE devin_status NOT IN ('finished', 'expired')
+        """)
+
+        # Dead-letter log for webhook handlers that threw before completing.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS failed_webhooks (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                handler    TEXT NOT NULL,
+                context    TEXT NOT NULL,
+                error      TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
         await db.commit()
     logger.info(f"Database initialised at {DB_PATH}")
 
@@ -51,10 +72,20 @@ async def record_session(
     issue_user: str,
     repo_full_name: str,
     devin_session_url: str,
-) -> None:
+) -> bool:
+    """Insert a new session row.
+
+    Returns True if a row was inserted (this caller claimed the issue), False
+    if an equivalent session already existed — either because the same
+    session_id was re-recorded (Devin idempotency) or because another active
+    session for this (issue_number, repo_full_name) tuple blocked the insert
+    via the partial unique index. Callers should use the return value to
+    decide whether to post first-touch side effects (e.g. the initial GitHub
+    comment) exactly once.
+    """
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cursor = await db.execute(
             """
             INSERT OR IGNORE INTO sessions
                 (session_id, issue_number, issue_title, issue_user, repo_full_name,
@@ -66,6 +97,7 @@ async def record_session(
              devin_session_url, now, now),
         )
         await db.commit()
+        return cursor.rowcount == 1
 
 
 async def update_session(
@@ -188,6 +220,35 @@ async def get_active_sessions() -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+async def record_failed_webhook(handler: str, context: dict, error: str) -> None:
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO failed_webhooks (handler, context, error, created_at) VALUES (?, ?, ?, ?)",
+            (handler, json.dumps(context, default=str), error, now),
+        )
+        await db.commit()
+
+
+async def get_failed_webhooks(limit: int = 100) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM failed_webhooks ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            try:
+                d["context"] = json.loads(d["context"])
+            except (TypeError, ValueError):
+                pass
+            result.append(d)
+        return result
 
 
 async def get_metrics() -> dict:

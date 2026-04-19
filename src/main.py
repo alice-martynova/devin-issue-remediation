@@ -5,6 +5,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any, Awaitable
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -96,6 +97,27 @@ async def _print_ngrok_url() -> None:
 _bot_github_user: str = ""
 
 
+async def _safe_run(handler: str, coro: Awaitable[Any], context: dict) -> None:
+    """Run a webhook handler coroutine, persisting any failure to the DB.
+
+    We respond 202 to GitHub the moment the task is scheduled, so any
+    exception inside the handler would otherwise vanish silently. Recording
+    it lets operators see what dropped via /failed_webhooks.
+    """
+    try:
+        await coro
+    except Exception as exc:
+        logger.exception("Webhook handler %s failed", handler)
+        try:
+            await observability.record_failed_webhook(handler, context, repr(exc))
+        except Exception:
+            logger.exception("Could not persist failed webhook for %s", handler)
+
+
+def _spawn(handler: str, coro: Awaitable[Any], context: dict) -> None:
+    asyncio.create_task(_safe_run(handler, coro, context))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _bot_github_user
@@ -138,10 +160,13 @@ async def github_webhook(request: Request):
     payload = await request.json()
     action = payload.get("action", "")
 
+    delivery_id = request.headers.get("X-GitHub-Delivery", "")
+
     if event == "issues" and action == "opened":
         issue = payload["issue"]
         repo = payload["repository"]
-        asyncio.create_task(
+        _spawn(
+            "handle_issue_opened",
             session_manager.handle_issue_opened(
                 issue_number=issue["number"],
                 issue_title=issue["title"],
@@ -149,7 +174,13 @@ async def github_webhook(request: Request):
                 issue_user=issue["user"]["login"],
                 repo_full_name=repo["full_name"],
                 default_branch=repo.get("default_branch") or "main",
-            )
+            ),
+            {
+                "event": event,
+                "delivery_id": delivery_id,
+                "issue_number": issue["number"],
+                "repo_full_name": repo["full_name"],
+            },
         )
         logger.info(f"Accepted issue #{issue['number']}: {issue['title']}")
         return {"status": "accepted", "issue_number": issue["number"]}
@@ -157,11 +188,18 @@ async def github_webhook(request: Request):
     if event == "issues" and action == "closed":
         issue = payload["issue"]
         repo = payload["repository"]
-        asyncio.create_task(
+        _spawn(
+            "handle_issue_closed",
             session_manager.handle_issue_closed(
                 issue_number=issue["number"],
                 repo_full_name=repo["full_name"],
-            )
+            ),
+            {
+                "event": event,
+                "delivery_id": delivery_id,
+                "issue_number": issue["number"],
+                "repo_full_name": repo["full_name"],
+            },
         )
         logger.info(f"Issue #{issue['number']} closed — archiving session")
         return {"status": "accepted", "issue_number": issue["number"]}
@@ -174,24 +212,35 @@ async def github_webhook(request: Request):
         issue = payload["issue"]
         repo = payload["repository"]
         is_pr_comment = "pull_request" in issue
+        context = {
+            "event": event,
+            "delivery_id": delivery_id,
+            "issue_number": issue["number"],
+            "repo_full_name": repo["full_name"],
+            "commenter": commenter,
+        }
         if is_pr_comment:
-            asyncio.create_task(
+            _spawn(
+                "handle_pr_comment",
                 session_manager.handle_pr_comment(
                     pr_number=issue["number"],
                     comment_body=comment["body"],
                     comment_user=commenter,
                     repo_full_name=repo["full_name"],
-                )
+                ),
+                context,
             )
             logger.info(f"Relaying PR comment from {commenter} on PR #{issue['number']}")
         else:
-            asyncio.create_task(
+            _spawn(
+                "handle_issue_comment",
                 session_manager.handle_issue_comment(
                     issue_number=issue["number"],
                     comment_body=comment["body"],
                     comment_user=commenter,
                     repo_full_name=repo["full_name"],
-                )
+                ),
+                context,
             )
             logger.info(f"Relaying comment from {commenter} on issue #{issue['number']}")
         return {"status": "accepted", "issue_number": issue["number"]}
@@ -208,6 +257,11 @@ async def health():
 @app.get("/sessions")
 async def list_sessions():
     return await observability.get_all_sessions()
+
+
+@app.get("/failed_webhooks")
+async def list_failed_webhooks(limit: int = 100):
+    return await observability.get_failed_webhooks(limit=limit)
 
 
 def _session_age(session: dict) -> tuple[int, str]:
