@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="refresh" content="30" />
   <title>Devin Remediation Dashboard</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -345,7 +344,17 @@
       document.getElementById('tab-archive').style.display = name === 'archive' ? '' : 'none';
       document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
+      location.hash = name;
     }
+
+    (function init() {
+      var tab = location.hash === '#archive' ? 'archive' : 'current';
+      if (tab === 'archive') {
+        var btns = document.querySelectorAll('.tab-btn');
+        switchTab('archive', btns[1]);
+      }
+      setTimeout(function() { location.reload(); }, 30000);
+    })();
 
     function filterTable(tab) {
       var isCurrent = tab === 'current';
