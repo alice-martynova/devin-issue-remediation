@@ -209,7 +209,6 @@ A vague body forces Devin to guess. A body with file paths, code snippets, and a
 | `http://localhost:8000/dashboard` | Live status dashboard (auto-refreshes every 30s) |
 | `http://localhost:8000/sessions` | Raw JSON of all sessions |
 | `http://localhost:8000/health` | Health check + aggregate metrics |
-| `http://localhost:4040` | ngrok tunnel inspector |
 
 ## Session lifecycle
 
