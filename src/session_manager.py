@@ -44,15 +44,42 @@ STATUS_LABELS = {
 }
 
 # Map Devin API status values to our internal vocabulary.
+#
+# Devin's v1 API exposes two status fields:
+#   - `status`: free-form string (e.g. "running") that reports whether the
+#     session process is alive, but does NOT distinguish "actively thinking"
+#     from "waiting for user input".
+#   - `status_enum`: the authoritative lifecycle state, including `blocked`
+#     when Devin is waiting for a human reply on an issue or PR.
+#
+# We prefer `status_enum` so `blocked` surfaces as "GitHub User Action" on
+# the dashboard instead of being collapsed into "Devin Working".
 _STATUS_MAP: dict[str, str] = {
+    # Legacy free-form `status` field values
     "running":   "working",
     "stopped":   "finished",
     "suspended": "expired",
+    # Transient `status_enum` values — Devin is transitioning, still active
+    "suspend_requested":          "working",
+    "suspend_requested_frontend": "working",
+    "resume_requested":           "working",
+    "resume_requested_frontend":  "working",
+    "resumed":                    "working",
 }
 
 
 def _normalize_status(raw: str) -> str:
     return _STATUS_MAP.get(raw, raw)
+
+
+def _extract_status(details: dict) -> str:
+    """Pick the most informative status field from a Devin session response.
+
+    `status_enum` distinguishes `blocked` (awaiting user input) from `working`;
+    the legacy `status` string often reports "running" for both. Fall back to
+    `status` only when `status_enum` is missing.
+    """
+    return details.get("status_enum") or details.get("status") or "working"
 
 
 def _extract_pr_url(details: dict) -> Optional[str]:
@@ -204,7 +231,7 @@ class SessionManager:
 
         try:
             details = await self.devin.get_session(session_id)
-            raw_status = details.get("status", "working")
+            raw_status = _extract_status(details)
             new_status = _normalize_status(raw_status)
             pr_url = _extract_pr_url(details)
 
