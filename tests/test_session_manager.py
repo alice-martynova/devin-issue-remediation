@@ -102,3 +102,13 @@ class TestBuildDevinPrompt:
         assert "Title" in prompt
         assert "Body text" in prompt
         assert "owner/repo" in prompt
+
+    def test_instructs_devin_to_comment_on_issue_when_blocked(self):
+        """When Devin needs user input it must post a comment on the GitHub
+        issue rather than waiting silently — the reporter is only notified
+        via issue comments."""
+        prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
+        assert "Asking for input" in prompt
+        assert "issue #42" in prompt
+        assert "do not wait silently" in prompt
+        assert "relayed back into this session" in prompt
