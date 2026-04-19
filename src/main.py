@@ -22,11 +22,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEVIN_API_KEY = os.environ["DEVIN_API_KEY"]
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"]
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"Required environment variable {name} is not set. "
+            "Copy .env.example to .env and fill in all values."
+        )
+    return value
+
+
+DEVIN_API_KEY = _require_env("DEVIN_API_KEY")
+GITHUB_TOKEN = _require_env("GITHUB_TOKEN")
+GITHUB_WEBHOOK_SECRET = _require_env("GITHUB_WEBHOOK_SECRET")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT_SECONDS", "120"))
+# URL of ngrok's local API; empty string disables auto-detection
+NGROK_API_URL = os.getenv("NGROK_API_URL", "http://ngrok:4040").strip()
 
 devin_client = DevinClient(api_key=DEVIN_API_KEY)
 github_client = GitHubClient(token=GITHUB_TOKEN)
@@ -49,11 +61,17 @@ async def _background_poller() -> None:
 
 
 async def _print_ngrok_url() -> None:
-    """Wait for ngrok to start, then log the public webhook URL."""
-    for attempt in range(15):
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get("http://ngrok:4040/api/tunnels", timeout=5)
+    """Wait for ngrok to start, then log the public webhook URL.
+
+    Skipped entirely when NGROK_API_URL is unset — useful when running outside
+    the docker-compose stack (e.g. behind a real reverse proxy in production).
+    """
+    if not NGROK_API_URL:
+        return
+    async with httpx.AsyncClient(timeout=5) as client:
+        for _ in range(15):
+            try:
+                resp = await client.get(f"{NGROK_API_URL}/api/tunnels")
                 tunnels = resp.json().get("tunnels", [])
                 for tunnel in tunnels:
                     if tunnel.get("proto") == "https":
@@ -66,11 +84,12 @@ async def _print_ngrok_url() -> None:
                             + "\n" + "=" * 60
                         )
                         return
-        except Exception:
-            pass
-        await asyncio.sleep(3)
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(3)
     logger.warning(
-        "Could not auto-detect ngrok URL. Check http://localhost:4040 manually."
+        "Could not auto-detect ngrok URL at %s. Check http://localhost:4040 manually.",
+        NGROK_API_URL,
     )
 
 
@@ -85,7 +104,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"Bot GitHub user: {_bot_github_user}")
     asyncio.create_task(_background_poller())
     asyncio.create_task(_print_ngrok_url())
-    yield
+    try:
+        yield
+    finally:
+        await devin_client.aclose()
+        await github_client.aclose()
 
 
 app = FastAPI(
@@ -125,6 +148,7 @@ async def github_webhook(request: Request):
                 issue_body=issue.get("body") or "",
                 issue_user=issue["user"]["login"],
                 repo_full_name=repo["full_name"],
+                default_branch=repo.get("default_branch") or "main",
             )
         )
         logger.info(f"Accepted issue #{issue['number']}: {issue['title']}")
@@ -192,12 +216,13 @@ def _session_age(session: dict) -> tuple[int, str]:
         start = datetime.fromisoformat(session["created_at"])
         end_raw = session.get("updated_at") if session["devin_status"] in {"finished", "expired"} else None
         end = datetime.fromisoformat(end_raw) if end_raw else datetime.utcnow()
-        minutes = max(0, int((end - start).total_seconds() / 60))
-        if minutes < 60:
-            return minutes, f"{minutes}m"
-        return minutes, f"{minutes // 60}h {minutes % 60}m"
-    except Exception:
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning("Could not compute age for session %s: %s", session.get("session_id"), exc)
         return 0, "—"
+    minutes = max(0, int((end - start).total_seconds() / 60))
+    if minutes < 60:
+        return minutes, f"{minutes}m"
+    return minutes, f"{minutes // 60}h {minutes % 60}m"
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

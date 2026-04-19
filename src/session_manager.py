@@ -115,12 +115,13 @@ def build_devin_prompt(
     issue_title: str,
     issue_body: str,
     repo_full_name: str,
+    default_branch: str,
 ) -> str:
     context_block = f"{_PROJECT_CONTEXT}\n\n" if _PROJECT_CONTEXT else ""
     return f"""{context_block}You are resolving a GitHub issue in the following repository.
 
 Repository: https://github.com/{repo_full_name}
-Branch: master
+Branch: {default_branch}
 Issue: #{issue_number} — {issue_title}
 
 Issue Details:
@@ -128,11 +129,11 @@ Issue Details:
 
 Instructions:
 1. Use your GitHub integration to access the repository — do not manually clone via the command line.
-2. Check out branch: master
+2. Check out branch: {default_branch}
 3. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
 4. Apply the minimal, targeted change described above — do not refactor or change unrelated code.
 5. Run the existing tests relevant to the changed file and capture the output.
-6. Open a pull request against master with:
+6. Open a pull request against {default_branch} with:
    - Title: "fix: {issue_title}"
    - Body: "Fixes #{issue_number}\\n\\n[Brief description of what was changed and why]"
 7. Post a follow-up comment on the PR with the test results in this format:
@@ -159,6 +160,7 @@ class SessionManager:
         issue_body: str,
         issue_user: str,
         repo_full_name: str,
+        default_branch: str,
     ) -> Optional[str]:
         owner, repo = repo_full_name.split("/", 1)
 
@@ -166,7 +168,9 @@ class SessionManager:
             logger.info(f"Session already exists for #{issue_number}, skipping")
             return None
 
-        prompt = build_devin_prompt(issue_number, issue_title, issue_body, repo_full_name)
+        prompt = build_devin_prompt(
+            issue_number, issue_title, issue_body, repo_full_name, default_branch
+        )
         idempotency_key = f"issue-{issue_number}-{repo_full_name}"
 
         logger.info(f"Creating Devin session for issue #{issue_number}: {issue_title}")
