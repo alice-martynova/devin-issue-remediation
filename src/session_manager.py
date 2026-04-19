@@ -35,14 +35,6 @@ _PROJECT_CONTEXT = _load_context()
 
 TERMINAL_STATUSES = {"finished", "expired"}
 
-# Human-readable labels for the dashboard and GitHub comments
-STATUS_LABELS = {
-    "working":  "Devin at work",
-    "blocked":  "Needs user input",
-    "finished": "Issue addressed",
-    "expired":  "Timed out",
-}
-
 # Map Devin API status values to our internal vocabulary.
 #
 # Devin's v1 API exposes two status fields:
@@ -128,21 +120,28 @@ Issue Details:
 {issue_body}
 
 Instructions:
-1. Use your GitHub integration to access the repository — do not manually clone via the command line.
-2. Check out branch: {default_branch}
-3. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
-4. Apply the minimal, targeted change described above — do not refactor or change unrelated code.
-5. Run the existing tests relevant to the changed file and capture the output.
-6. Open a pull request against {default_branch} with:
+1. Before doing anything else, post a comment on issue #{issue_number} in {repo_full_name} \
+saying "**Working on this.** I'll comment here again when a PR is ready." Use your GitHub \
+integration — the comment must be posted by you (the `devin-ai-integration[bot]` identity), \
+not by any other account.
+2. Use your GitHub integration to access the repository — do not manually clone via the command line.
+3. Check out branch: {default_branch}
+4. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
+5. Apply the minimal, targeted change described above — do not refactor or change unrelated code.
+6. Run the existing tests relevant to the changed file and capture the output.
+7. Open a pull request against {default_branch} with:
    - Title: "fix: {issue_title}"
    - Body: "Fixes #{issue_number}\\n\\n[Brief description of what was changed and why]"
-7. Post a follow-up comment on the PR with the test results in this format:
+8. Post a follow-up comment on the PR with the test results in this format:
    ## Test Results
    **Status:** PASSED / FAILED
    **Command run:** `<the exact command used>`
    ```
    <test output>
    ```
+9. Post a final comment on issue #{issue_number} with a link to the PR: \
+"**Opened fix PR:** <pr_url>". This closes the loop for the reporter, who is \
+watching the issue, not the PR.
 
 Asking for input: If at any point you need a human decision before you can continue — including \
 ambiguous requirements, missing credentials, a design choice between valid approaches, the issue \
@@ -212,21 +211,14 @@ class SessionManager:
 
         if not inserted:
             logger.info(
-                "Duplicate webhook delivery for issue #%d — skipping first-touch comment",
+                "Duplicate webhook delivery for issue #%d — skipping",
                 issue_number,
             )
             return session_id
 
-        await self.github.post_comment(
-            owner=owner,
-            repo=repo,
-            issue_number=issue_number,
-            body=(
-                f"**Devin is working on this.**\n\n"
-                f"Session: {devin_url}\n\n"
-                f"Devin will comment here when a PR is ready."
-            ),
-        )
+        # Devin itself posts the first-touch "working on this" comment from
+        # inside the session (see the prompt), so the orchestrator does not
+        # post from its own GitHub identity here.
 
         logger.info(f"Session {session_id} started for issue #{issue_number}")
         return session_id
@@ -249,8 +241,6 @@ class SessionManager:
 
     async def _poll_one(self, session: dict) -> None:
         session_id = session["session_id"]
-        owner, repo = session["repo_full_name"].split("/", 1)
-        issue_number = session["issue_number"]
 
         await self._check_pr_merged(session)
 
@@ -273,29 +263,21 @@ class SessionManager:
             if new_status == last_notified:
                 return
 
-            label = STATUS_LABELS.get(new_status, new_status)
-
+            # All user-facing comments on the issue are posted by Devin
+            # itself from inside the session (first-touch, PR-ready, blocked
+            # questions) so they render as `devin-ai-integration[bot]` and
+            # stay distinguishable from human replies. The orchestrator only
+            # records that it has observed each state so the dashboard can
+            # surface it and we don't re-log it every poll cycle.
             if new_status == "finished":
-                body = (
-                    f"**{label}.** Devin has opened a fix PR: {pr_url}"
-                    if pr_url
-                    else f"**{label}.** No PR was found. Review manually: {session['devin_session_url']}"
-                )
                 logger.info(f"Session {session_id} finished — PR: {pr_url}")
             elif new_status == "blocked":
-                # Devin posts its own comment on the issue asking for input — no need to duplicate it
                 logger.warning(f"Session {session_id} is blocked — Devin will comment directly")
-                await observability.update_notified_status(session_id, new_status)
-                return
             elif new_status == "expired":
-                body = f"**{label}.** Session expired without completing.\n\nManual review needed: {session['devin_session_url']}"
                 logger.error(f"Session {session_id} expired")
             else:
                 return
 
-            await self.github.post_comment(
-                owner=owner, repo=repo, issue_number=issue_number, body=body
-            )
             await observability.update_notified_status(session_id, new_status)
 
         except Exception as e:
