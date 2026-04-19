@@ -93,7 +93,8 @@ class TestBuildDevinPrompt:
         prompt = build_devin_prompt(1, "t", "b", "owner/repo", "develop")
         assert "Branch: develop" in prompt
         assert "Check out branch: develop" in prompt
-        assert "pull request against develop" in prompt
+        assert "pull request" in prompt
+        assert "against develop" in prompt
         assert "master" not in prompt
 
     def test_embeds_issue_details(self):
@@ -102,3 +103,24 @@ class TestBuildDevinPrompt:
         assert "Title" in prompt
         assert "Body text" in prompt
         assert "owner/repo" in prompt
+
+    def test_draft_pr_flag_threads_into_prompt(self):
+        prompt = build_devin_prompt(1, "t", "b", "o/r", "main", draft_pr=True)
+        assert "draft pull request" in prompt
+
+    def test_draft_pr_off_by_default(self):
+        prompt = build_devin_prompt(1, "t", "b", "o/r", "main")
+        assert "draft pull request" not in prompt
+
+    def test_reviewers_rendered_as_at_mentions(self):
+        prompt = build_devin_prompt(
+            1, "t", "b", "o/r", "main", pr_reviewers=["alice", "@bob"]
+        )
+        assert "@alice" in prompt
+        assert "@bob" in prompt
+        assert "@@" not in prompt  # leading @ on inputs must be normalized
+        assert "Request review" in prompt
+
+    def test_no_reviewer_step_when_list_empty(self):
+        prompt = build_devin_prompt(1, "t", "b", "o/r", "main", pr_reviewers=[])
+        assert "Request review" not in prompt

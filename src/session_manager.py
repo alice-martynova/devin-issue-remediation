@@ -116,8 +116,21 @@ def build_devin_prompt(
     issue_body: str,
     repo_full_name: str,
     default_branch: str,
+    *,
+    draft_pr: bool = False,
+    pr_reviewers: Optional[list[str]] = None,
 ) -> str:
     context_block = f"{_PROJECT_CONTEXT}\n\n" if _PROJECT_CONTEXT else ""
+    draft_clause = " as a **draft pull request**" if draft_pr else ""
+
+    reviewers_step = ""
+    if pr_reviewers:
+        reviewer_mentions = ", ".join(f"@{r.lstrip('@')}" for r in pr_reviewers)
+        reviewers_step = (
+            f"8. Request review on the PR from: {reviewer_mentions} — "
+            "use the GitHub integration's reviewer-request API (not a comment mention).\n"
+        )
+
     return f"""{context_block}You are resolving a GitHub issue in the following repository.
 
 Repository: https://github.com/{repo_full_name}
@@ -133,7 +146,7 @@ Instructions:
 3. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
 4. Apply the minimal, targeted change described above — do not refactor or change unrelated code.
 5. Run the existing tests relevant to the changed file and capture the output.
-6. Open a pull request against {default_branch} with:
+6. Open a pull request{draft_clause} against {default_branch} with:
    - Title: "fix: {issue_title}"
    - Body: "Fixes #{issue_number}\\n\\n[Brief description of what was changed and why]"
 7. Post a follow-up comment on the PR with the test results in this format:
@@ -143,7 +156,7 @@ Instructions:
    ```
    <test output>
    ```
-
+{reviewers_step}
 Important: Only modify the code necessary to address this specific issue.
 """
 
@@ -161,6 +174,8 @@ class SessionManager:
         issue_user: str,
         repo_full_name: str,
         default_branch: str,
+        draft_pr: bool = False,
+        pr_reviewers: Optional[list[str]] = None,
     ) -> Optional[str]:
         owner, repo = repo_full_name.split("/", 1)
 
@@ -169,7 +184,13 @@ class SessionManager:
             return None
 
         prompt = build_devin_prompt(
-            issue_number, issue_title, issue_body, repo_full_name, default_branch
+            issue_number,
+            issue_title,
+            issue_body,
+            repo_full_name,
+            default_branch,
+            draft_pr=draft_pr,
+            pr_reviewers=pr_reviewers,
         )
         idempotency_key = f"issue-{issue_number}-{repo_full_name}"
 

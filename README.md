@@ -245,6 +245,17 @@ Each session moves through the three user-facing statuses shown on the dashboard
 └── tests/                 # Unit tests — run with `pytest`
 ```
 
+## Product configuration
+
+Four optional env vars gate behavior — all unset means "fire on every issue and open a normal PR":
+
+| Var | Purpose | Example |
+| --- | --- | --- |
+| `TRIGGER_LABELS` | Only fire if the issue carries at least one of these labels (comma-separated, case-insensitive) | `TRIGGER_LABELS=devin,auto-fix` |
+| `TRIGGER_TITLE_PREFIX` | Only fire if the issue title starts with this prefix (case-insensitive) | `TRIGGER_TITLE_PREFIX=[devin]` |
+| `DRAFT_PR` | If truthy (`1`/`true`/`yes`/`on`), instruct Devin to open the PR as a draft | `DRAFT_PR=true` |
+| `PR_REVIEWERS` | Comma-separated GitHub usernames to request review from on each PR | `PR_REVIEWERS=alice,bob` |
+
 ## Development
 
 ```bash

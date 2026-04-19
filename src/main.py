@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from . import observability
+from . import observability, trigger
 from .devin_client import DevinClient
 from .github_client import GitHubClient
 from .session_manager import SessionManager
@@ -165,6 +165,13 @@ async def github_webhook(request: Request):
     if event == "issues" and action == "opened":
         issue = payload["issue"]
         repo = payload["repository"]
+        accept, reason = trigger.should_trigger(issue)
+        if not accept:
+            logger.info(
+                "Skipping issue #%s in %s: %s",
+                issue["number"], repo["full_name"], reason,
+            )
+            return {"status": "ignored", "reason": reason, "issue_number": issue["number"]}
         _spawn(
             "handle_issue_opened",
             session_manager.handle_issue_opened(
@@ -174,6 +181,8 @@ async def github_webhook(request: Request):
                 issue_user=issue["user"]["login"],
                 repo_full_name=repo["full_name"],
                 default_branch=repo.get("default_branch") or "main",
+                draft_pr=trigger.DRAFT_PR,
+                pr_reviewers=trigger.PR_REVIEWERS,
             ),
             {
                 "event": event,

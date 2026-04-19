@@ -110,6 +110,74 @@ class TestWebhookRouting:
         assert resp.status_code == 202
         assert h.call_args.kwargs["default_branch"] == "main"
 
+    def test_issue_ignored_when_trigger_label_filter_excludes_it(self, client, monkeypatch):
+        from src import main as main_module
+
+        monkeypatch.setattr(main_module.trigger, "TRIGGER_LABELS", {"devin"})
+        payload = {
+            "action": "opened",
+            "issue": {
+                "number": 99,
+                "title": "no label match",
+                "body": "",
+                "user": {"login": "u"},
+                "labels": [{"name": "bug"}],
+            },
+            "repository": {"full_name": "alice/repo", "default_branch": "main"},
+        }
+        body = json.dumps(payload).encode()
+
+        with patch("src.main.session_manager.handle_issue_opened", new_callable=AsyncMock) as h:
+            resp = client.post(
+                "/webhook/github",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "issues",
+                    "X-Hub-Signature-256": _sign(body, "test-secret"),
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "ignored"
+        assert "no matching trigger label" in resp.json()["reason"]
+        h.assert_not_called()
+
+    def test_issue_accepted_when_label_filter_matches(self, client, monkeypatch):
+        from src import main as main_module
+
+        monkeypatch.setattr(main_module.trigger, "TRIGGER_LABELS", {"devin"})
+        monkeypatch.setattr(main_module.trigger, "DRAFT_PR", True)
+        monkeypatch.setattr(main_module.trigger, "PR_REVIEWERS", ["alice"])
+
+        payload = {
+            "action": "opened",
+            "issue": {
+                "number": 100,
+                "title": "fixme",
+                "body": "",
+                "user": {"login": "u"},
+                "labels": [{"name": "devin"}],
+            },
+            "repository": {"full_name": "alice/repo", "default_branch": "main"},
+        }
+        body = json.dumps(payload).encode()
+
+        with patch("src.main.session_manager.handle_issue_opened", new_callable=AsyncMock) as h:
+            resp = client.post(
+                "/webhook/github",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "issues",
+                    "X-Hub-Signature-256": _sign(body, "test-secret"),
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "accepted"
+        h.assert_called_once()
+        assert h.call_args.kwargs["draft_pr"] is True
+        assert h.call_args.kwargs["pr_reviewers"] == ["alice"]
+
     def test_bot_comments_are_ignored(self, client):
         payload = {
             "action": "created",
