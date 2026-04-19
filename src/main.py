@@ -94,9 +94,6 @@ async def _print_ngrok_url() -> None:
     )
 
 
-_bot_github_user: str = ""
-
-
 async def _safe_run(handler: str, coro: Awaitable[Any], context: dict) -> None:
     """Run a webhook handler coroutine, persisting any failure to the DB.
 
@@ -120,10 +117,7 @@ def _spawn(handler: str, coro: Awaitable[Any], context: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _bot_github_user
     await observability.init_db()
-    _bot_github_user = await github_client.get_authenticated_user()
-    logger.info(f"Bot GitHub user: {_bot_github_user}")
     asyncio.create_task(_background_poller())
     asyncio.create_task(_print_ngrok_url())
     try:
@@ -207,7 +201,11 @@ async def github_webhook(request: Request):
     if event == "issue_comment" and action == "created":
         comment = payload["comment"]
         commenter = comment["user"]["login"]
-        if commenter == _bot_github_user or commenter == "devin-ai-integration[bot]":
+        # Devin's own comments on the issue/PR must not be relayed back into
+        # its own session. All app-authored status updates are posted by
+        # Devin itself from inside the session, so this is the only identity
+        # we need to filter here.
+        if commenter == "devin-ai-integration[bot]":
             return {"status": "ignored", "reason": "bot_comment"}
         issue = payload["issue"]
         repo = payload["repository"]

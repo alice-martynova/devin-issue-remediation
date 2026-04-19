@@ -14,7 +14,6 @@ def client(monkeypatch):
     # Prevent the lifespan from hitting the real GitHub API / starting the poller.
     from src import main as main_module
 
-    monkeypatch.setattr(main_module.github_client, "get_authenticated_user", AsyncMock(return_value="bot"))
     monkeypatch.setattr(main_module, "_background_poller", AsyncMock())
     monkeypatch.setattr(main_module, "_print_ngrok_url", AsyncMock())
     monkeypatch.setattr(main_module.observability, "init_db", AsyncMock())
@@ -132,6 +131,37 @@ class TestWebhookRouting:
         assert resp.status_code == 202
         assert resp.json()["reason"] == "bot_comment"
         h.assert_not_called()
+
+    def test_human_comment_from_token_owner_is_relayed(self, client):
+        """The token owner (whoever minted GITHUB_TOKEN) is a regular human
+        from the webhook's perspective. Their issue comments must be relayed
+        into the Devin session — otherwise replies on issues go silently
+        dropped and Devin stays blocked forever."""
+        payload = {
+            "action": "created",
+            "comment": {"user": {"login": "alice-martynova"}, "body": "please close as duplicate"},
+            "issue": {"number": 42},
+            "repository": {"full_name": "alice-martynova/superset"},
+        }
+        body = json.dumps(payload).encode()
+
+        with patch("src.main.session_manager.handle_issue_comment", new_callable=AsyncMock) as h:
+            resp = client.post(
+                "/webhook/github",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "issue_comment",
+                    "X-Hub-Signature-256": _sign(body, "test-secret"),
+                },
+            )
+
+        assert resp.status_code == 202
+        assert resp.json().get("reason") != "bot_comment"
+        h.assert_called_once()
+        kwargs = h.call_args.kwargs
+        assert kwargs["issue_number"] == 42
+        assert kwargs["comment_user"] == "alice-martynova"
+        assert kwargs["comment_body"] == "please close as duplicate"
 
     def test_unknown_event_is_ignored(self, client):
         body = b"{}"

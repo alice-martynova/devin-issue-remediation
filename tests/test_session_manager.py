@@ -126,3 +126,17 @@ class TestBuildDevinPrompt:
         resolved or a duplicate — not just ambiguous requirements."""
         prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
         assert "already be fixed" in prompt or "duplicate" in prompt
+
+    def test_instructs_devin_to_post_first_touch_comment(self):
+        """Devin (not the orchestrator) posts the 'Working on this' comment
+        so it renders as devin-ai-integration[bot] and does not get confused
+        with human replies by the webhook relay."""
+        prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
+        assert "Working on this" in prompt
+        assert "devin-ai-integration[bot]" in prompt
+
+    def test_instructs_devin_to_post_pr_link_comment_on_issue(self):
+        """After opening the PR, Devin must comment on the issue with the PR
+        link so the reporter (who is watching the issue, not the PR) sees it."""
+        prompt = build_devin_prompt(42, "Title", "Body", "owner/repo", "main")
+        assert "Opened fix PR" in prompt
