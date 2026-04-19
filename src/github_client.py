@@ -16,6 +16,19 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    async def get_authenticated_user(self) -> str:
+        async def _call():
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{GITHUB_API_URL}/user",
+                    headers=self.headers,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return response.json()["login"]
+
+        return await with_retry(_call)
+
     async def post_comment(
         self, owner: str, repo: str, issue_number: int, body: str
     ) -> dict:

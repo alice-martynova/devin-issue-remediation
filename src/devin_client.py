@@ -59,6 +59,20 @@ class DevinClient:
 
         return await with_retry(_call)
 
+    async def send_message(self, session_id: str, message: str) -> dict:
+        async def _call():
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{DEVIN_BASE_URL}/sessions/{session_id}/message",
+                    headers=self.headers,
+                    json={"message": message},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await with_retry(_call)
+
     async def list_sessions(self, limit: int = 100) -> list[dict]:
         async def _call():
             async with httpx.AsyncClient() as client:

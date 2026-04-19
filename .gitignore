@@ -1,6 +1,9 @@
 # Secrets — never commit
 .env
 
+# Project-specific Devin context (context.example.txt is the committed template)
+context.txt
+
 # Database
 /data/
 *.db

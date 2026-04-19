@@ -19,6 +19,7 @@
     h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.25rem; }
     .subtitle { color: #64748b; font-size: 0.875rem; margin-bottom: 2rem; }
 
+    /* ── Metric cards ─────────────────────────────────── */
     .metrics {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -32,14 +33,74 @@
       border-radius: 8px;
       padding: 1.25rem 1.5rem;
     }
-
-    .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .card .label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
     .card .value { font-size: 2rem; font-weight: 700; margin-top: 0.25rem; }
-    .card.green .value  { color: #34d399; }
-    .card.blue .value   { color: #60a5fa; }
-    .card.yellow .value { color: #fbbf24; }
-    .card.purple .value { color: #a78bfa; }
+    .card .sub   { font-size: 0.72rem; color: #64748b; margin-top: 0.2rem; }
 
+    .card.blue   .value { color: #60a5fa; }
+    .card.yellow .value { color: #fbbf24; }
+    .card.red    .value { color: #f87171; }
+
+    /* ── Tabs ─────────────────────────────────────────── */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #2d3748;
+      margin-bottom: 1.5rem;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 0.875rem;
+      padding: 0.6rem 1.25rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s;
+    }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.active { color: #e2e8f0; border-bottom-color: #60a5fa; font-weight: 600; }
+
+    /* ── Filter bar ───────────────────────────────────── */
+    .filter-bar {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .filter-bar input,
+    .filter-bar select {
+      background: #1e2330;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 0.8rem;
+      padding: 0.45rem 0.75rem;
+      outline: none;
+    }
+    .filter-bar input { min-width: 220px; }
+    .filter-bar input::placeholder { color: #4a5568; }
+    .filter-bar input:focus,
+    .filter-bar select:focus { border-color: #60a5fa; }
+    .filter-bar select option { background: #1e2330; }
+    .filter-count { font-size: 0.78rem; color: #64748b; align-self: center; }
+
+    /* ── Archive summary strip ───────────────────────── */
+    .archive-summary {
+      display: flex;
+      gap: 2rem;
+      background: #1e2330;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+    }
+    .archive-summary .stat-label { color: #64748b; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.15rem; }
+    .archive-summary .stat-value { font-weight: 700; font-size: 1.25rem; color: #a78bfa; }
+
+    /* ── Table ────────────────────────────────────────── */
     table {
       width: 100%;
       border-collapse: collapse;
@@ -49,28 +110,28 @@
       overflow: hidden;
       font-size: 0.875rem;
     }
-
     th {
       background: #161b27;
       padding: 0.75rem 1rem;
       text-align: left;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: #64748b;
       border-bottom: 1px solid #2d3748;
     }
-
     td {
       padding: 0.75rem 1rem;
       border-bottom: 1px solid #1a2033;
       vertical-align: middle;
     }
-
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: #242b3d; }
+    tr.stale td { background: #2a2210; }
+    tr.stale:hover td { background: #332a12; }
+    tr.hidden { display: none; }
 
-    /* Devin status badges */
+    /* ── Badges ───────────────────────────────────────── */
     .badge {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -78,16 +139,16 @@
       font-size: 0.75rem;
       font-weight: 600;
     }
-    .badge-working  { background: #1d3a5c; color: #60a5fa; }
-    .badge-blocked  { background: #451a03; color: #fbbf24; }
-    .badge-finished { background: #064e3b; color: #34d399; }
-    .badge-expired  { background: #3b1a1a; color: #f87171; }
-    .badge-unknown  { background: #1e2330; color: #94a3b8; }
+    /* User-facing status badges */
+    .badge-issue-opened  { background: #1e2a3a; color: #94a3b8; }
+    .badge-devin-working { background: #1d3a5c; color: #60a5fa; }
+    .badge-devin-action  { background: #2d1a45; color: #c084fc; }
+    .badge-user-action   { background: #451a03; color: #fbbf24; }
+    /* Archive */
+    .badge-merged        { background: #1a2e4a; color: #818cf8; }
 
-    /* PR merged badges */
-    .badge-merged { background: #1a2e4a; color: #818cf8; }
-    .badge-open   { background: #064e3b; color: #34d399; }
-    .badge-none   { color: #4a5568; }
+    .age-stale { color: #fbbf24; font-weight: 600; }
+    .age-ok    { color: #64748b; }
 
     a { color: #60a5fa; text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -98,97 +159,220 @@
 </head>
 <body>
   <h1>Devin Remediation Dashboard</h1>
-  <p class="subtitle">Apache Superset · Security vulnerability remediation · auto-refreshes every 30s</p>
+  <p class="subtitle">Devin issue remediation · auto-refreshes every 30s</p>
 
-  {% set status_labels = {
-    "working":  "Devin at work",
-    "blocked":  "Needs user input",
-    "finished": "Issue addressed",
-    "expired":  "Timed out"
-  } %}
+  {% set archived = sessions | selectattr('pr_merged') | list + (sessions | rejectattr('pr_merged') | selectattr('issue_closed') | list) %}
+  {% set current  = sessions | rejectattr('pr_merged') | rejectattr('issue_closed') | list %}
 
+  {# Derive counts using the same display-status logic as the table rows #}
+  {% set cnt_issue_opened  = current | selectattr('devin_status', 'equalto', 'new')     | list | length %}
+  {% set cnt_devin_working = current | selectattr('devin_status', 'equalto', 'working') | list | length %}
+  {% set cnt_user_action   = current | length - cnt_issue_opened - cnt_devin_working %}
+
+  {# ── Metric cards ──────────────────────────────────────── #}
   <div class="metrics">
     <div class="card blue">
-      <div class="label">Total Sessions</div>
-      <div class="value">{{ metrics.total }}</div>
-    </div>
-    <div class="card green">
-      <div class="label">Issue Addressed</div>
-      <div class="value">{{ metrics.by_status.get('finished', 0) }}</div>
+      <div class="label">Devin Working</div>
+      <div class="value">{{ cnt_devin_working }}</div>
+      <div class="sub">actively processing</div>
     </div>
     <div class="card yellow">
-      <div class="label">Devin at Work</div>
-      <div class="value">{{ metrics.by_status.get('working', 0) }}</div>
+      <div class="label">GitHub User Action</div>
+      <div class="value">{{ cnt_user_action }}</div>
+      <div class="sub">comment on issue or review PR</div>
     </div>
-    <div class="card purple">
-      <div class="label">PRs Merged</div>
-      <div class="value">{{ metrics.prs_merged }}</div>
-    </div>
-    <div class="card green">
-      <div class="label">Success Rate</div>
-      <div class="value">{{ metrics.success_rate }}%</div>
+    <div class="card" style="background:#1e2330;border:1px solid #2d3748;border-radius:8px;padding:1.25rem 1.5rem">
+      <div class="label">Issue Opened</div>
+      <div class="value" style="color:#94a3b8">{{ cnt_issue_opened }}</div>
+      <div class="sub">queued, not yet started</div>
     </div>
   </div>
 
-  {% if sessions %}
-  <table>
-    <thead>
-      <tr>
-        <th>Issue</th>
-        <th>Title</th>
-        <th>Devin Status</th>
-        <th>PR Status</th>
-        <th>Pull Request</th>
-        <th>Devin Session</th>
-        <th>Started</th>
-        <th>Updated</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in sessions %}
-      <tr>
-        <td>#{{ s.issue_number }}</td>
-        <td>{{ s.issue_title }}</td>
-        <td>
-          <span class="badge badge-{{ s.devin_status or 'unknown' }}">
-            {{ status_labels.get(s.devin_status, s.devin_status or 'unknown') }}
-          </span>
-        </td>
-        <td>
-          {% if s.pr_url %}
-            {% if s.pr_merged %}
-              <span class="badge badge-merged">PR Merged</span>
+  {# ── Tab bar ───────────────────────────────────────────── #}
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('current', this)">Current</button>
+    <button class="tab-btn"        onclick="switchTab('archive', this)">Archive ({{ archived | length }})</button>
+  </div>
+
+  {# ── Current tab ───────────────────────────────────────── #}
+  <div id="tab-current">
+    <div class="filter-bar">
+      <input  id="cur-text"   type="text"   placeholder="Search issue # or title…" oninput="filterTable('current')">
+      <select id="cur-status" onchange="filterTable('current')">
+        <option value="">All statuses</option>
+        <option value="issue-opened">Issue Opened</option>
+        <option value="devin-working">Devin Working</option>
+        <option value="user-action">GitHub User Action</option>
+      </select>
+      <span id="cur-count" class="filter-count"></span>
+    </div>
+
+    {% if current %}
+    <table id="tbl-current">
+      <thead>
+        <tr>
+          <th>Issue</th>
+          <th>User</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Pull Request</th>
+          <th>Devin Session</th>
+          <th>Age</th>
+          <th>Time Opened</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in current %}
+        {% set is_stale = s.devin_status not in ('finished', 'expired') and s.age_minutes > 120 %}
+
+        {# Compute the user-facing status and its display label #}
+        {% if s.devin_status == 'new' %}
+          {% set display_status = 'issue-opened' %}
+          {% set status_label   = 'Issue Opened' %}
+        {% elif s.devin_status == 'working' %}
+          {% set display_status = 'devin-working' %}
+          {% set status_label   = 'Devin Working' %}
+        {% else %}
+          {% set display_status = 'user-action' %}
+          {% set status_label   = 'GitHub User Action' %}
+        {% endif %}
+
+        <tr data-status="{{ display_status }}"
+            data-issue="{{ s.issue_number }}"
+            data-title="{{ s.issue_title | lower }}"
+            {% if is_stale %}class="stale"{% endif %}>
+          <td><a href="https://github.com/{{ s.repo_full_name }}/issues/{{ s.issue_number }}" target="_blank">#{{ s.issue_number }}</a></td>
+          <td style="color:#94a3b8">{{ s.issue_user or '—' }}</td>
+          <td>{{ s.issue_title }}</td>
+          <td>
+            <span class="badge badge-{{ display_status }}">{{ status_label }}</span>
+          </td>
+          <td>
+            {% if s.pr_url %}
+              <a href="{{ s.pr_url }}" target="_blank">View PR</a>
             {% else %}
-              <span class="badge badge-open">Open</span>
+              <span style="color:#4a5568">—</span>
             {% endif %}
-          {% else %}
-            <span class="badge-none">—</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if s.pr_url %}
-            <a href="{{ s.pr_url }}" target="_blank">View PR</a>
-          {% else %}
-            <span style="color:#4a5568">—</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if s.devin_session_url %}
-            <a href="{{ s.devin_session_url }}" target="_blank">Open</a>
-          {% else %}
-            <span style="color:#4a5568">—</span>
-          {% endif %}
-        </td>
-        <td style="color:#64748b">{{ s.created_at[:19].replace('T',' ') }}</td>
-        <td style="color:#64748b">{{ s.updated_at[:19].replace('T',' ') }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="empty">No sessions yet. Create an issue in your fork to trigger remediation.</div>
-  {% endif %}
+          </td>
+          <td>
+            {% if s.devin_session_url %}
+              <a href="{{ s.devin_session_url }}" target="_blank">View Devin Session</a>
+            {% else %}
+              <span style="color:#4a5568">—</span>
+            {% endif %}
+          </td>
+          <td class="{{ 'age-stale' if is_stale else 'age-ok' }}">
+            {{ s.age_display }}{% if is_stale %}&nbsp;⚠{% endif %}
+          </td>
+          <td style="color:#64748b">{{ s.created_at[:19].replace('T',' ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No active sessions. Create an issue in your fork to trigger remediation.</div>
+    {% endif %}
+  </div>
+
+  {# ── Archive tab ───────────────────────────────────────── #}
+  <div id="tab-archive" style="display:none">
+
+    <div class="archive-summary">
+      <div>
+        <div class="stat-label">Vulnerabilities Remediated</div>
+        <div class="stat-value">{{ archived | length }}</div>
+      </div>
+      <div>
+        <div class="stat-label">PRs Merged</div>
+        <div class="stat-value">{{ metrics.prs_merged }}</div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <input id="arc-text" type="text" placeholder="Search issue # or title…" oninput="filterTable('archive')">
+      <span id="arc-count" class="filter-count"></span>
+    </div>
+
+    {% if archived %}
+    <table id="tbl-archive">
+      <thead>
+        <tr>
+          <th>Issue</th>
+          <th>User</th>
+          <th>Title</th>
+          <th>Pull Request</th>
+          <th>Devin Session</th>
+          <th>Time Opened</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in archived %}
+        <tr data-issue="{{ s.issue_number }}"
+            data-title="{{ s.issue_title | lower }}">
+          <td><a href="https://github.com/{{ s.repo_full_name }}/issues/{{ s.issue_number }}" target="_blank">#{{ s.issue_number }}</a></td>
+          <td style="color:#94a3b8">{{ s.issue_user or '—' }}</td>
+          <td>{{ s.issue_title }}</td>
+          <td>
+            {% if s.pr_url %}
+              <a href="{{ s.pr_url }}" target="_blank">View PR</a>
+              &nbsp;<span class="badge badge-merged">Merged</span>
+            {% else %}
+              <span style="color:#4a5568">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if s.devin_session_url %}
+              <a href="{{ s.devin_session_url }}" target="_blank">View Devin Session</a>
+            {% else %}
+              <span style="color:#4a5568">—</span>
+            {% endif %}
+          </td>
+          <td style="color:#64748b">{{ s.created_at[:19].replace('T',' ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No merged PRs yet. Merged pull requests will appear here.</div>
+    {% endif %}
+  </div>
 
   <p class="refresh-note">Page auto-refreshes every 30 seconds</p>
+
+  <script>
+    function switchTab(name, btn) {
+      document.getElementById('tab-current').style.display = name === 'current' ? '' : 'none';
+      document.getElementById('tab-archive').style.display = name === 'archive' ? '' : 'none';
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+    }
+
+    function filterTable(tab) {
+      var isCurrent = tab === 'current';
+      var text   = (document.getElementById(isCurrent ? 'cur-text' : 'arc-text').value || '').toLowerCase();
+      var status = isCurrent ? (document.getElementById('cur-status').value || '') : '';
+      var tbody  = document.querySelector('#tbl-' + tab + ' tbody');
+      if (!tbody) return;
+
+      var rows = tbody.querySelectorAll('tr');
+      var visible = 0;
+      rows.forEach(function(row) {
+        var issueMatch  = row.dataset.issue && row.dataset.issue.includes(text);
+        var titleMatch  = row.dataset.title && row.dataset.title.includes(text);
+        var textMatch   = !text || issueMatch || titleMatch;
+        var statusMatch = !status || row.dataset.status === status;
+        var show = textMatch && statusMatch;
+        row.classList.toggle('hidden', !show);
+        if (show) visible++;
+      });
+
+      var countEl = document.getElementById(isCurrent ? 'cur-count' : 'arc-count');
+      if (text || status) {
+        countEl.textContent = visible + ' of ' + rows.length + ' shown';
+      } else {
+        countEl.textContent = '';
+      }
+    }
+  </script>
 </body>
 </html>

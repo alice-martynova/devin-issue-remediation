@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 from typing import Optional
 
@@ -8,6 +9,29 @@ from .github_client import GitHubClient
 from . import observability
 
 logger = logging.getLogger(__name__)
+
+_CONTEXT_FILE = os.getenv("DEVIN_CONTEXT_FILE", "/config/context.txt")
+_CONTEXT_ENV  = os.getenv("DEVIN_CONTEXT", "").strip()
+
+
+def _load_context() -> str:
+    """Return project context to prepend to every Devin prompt.
+
+    Reads from DEVIN_CONTEXT_FILE if present, falls back to the DEVIN_CONTEXT
+    env var, and strips comment lines (starting with #).
+    """
+    raw = ""
+    try:
+        with open(_CONTEXT_FILE) as f:
+            raw = f.read()
+    except OSError:
+        raw = _CONTEXT_ENV
+
+    lines = [l for l in raw.splitlines() if not l.startswith("#")]
+    return "\n".join(lines).strip()
+
+
+_PROJECT_CONTEXT = _load_context()
 
 TERMINAL_STATUSES = {"finished", "expired"}
 
@@ -65,20 +89,21 @@ def build_devin_prompt(
     issue_body: str,
     repo_full_name: str,
 ) -> str:
-    return f"""You are fixing a verified security vulnerability in the Apache Superset repository.
+    context_block = f"{_PROJECT_CONTEXT}\n\n" if _PROJECT_CONTEXT else ""
+    return f"""{context_block}You are resolving a GitHub issue in the following repository.
 
 Repository: https://github.com/{repo_full_name}
 Branch: master
 Issue: #{issue_number} — {issue_title}
 
-Vulnerability Details:
+Issue Details:
 {issue_body}
 
 Instructions:
 1. Use your GitHub integration to access the repository — do not manually clone via the command line.
 2. Check out branch: master
 3. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
-4. Apply the minimal, targeted fix described above — do not refactor or change unrelated code.
+4. Apply the minimal, targeted change described above — do not refactor or change unrelated code.
 5. Run the existing tests relevant to the changed file and capture the output.
 6. Open a pull request against master with:
    - Title: "fix: {issue_title}"
@@ -91,7 +116,7 @@ Instructions:
    <test output>
    ```
 
-Important: Only modify the code necessary to address this specific vulnerability.
+Important: Only modify the code necessary to address this specific issue.
 """
 
 
@@ -105,6 +130,7 @@ class SessionManager:
         issue_number: int,
         issue_title: str,
         issue_body: str,
+        issue_user: str,
         repo_full_name: str,
     ) -> Optional[str]:
         owner, repo = repo_full_name.split("/", 1)
@@ -120,7 +146,7 @@ class SessionManager:
         result = await self.devin.create_session(
             prompt=prompt,
             title=f"Fix: {issue_title[:80]}",
-            tags=[f"issue-{issue_number}", "security", "superset"],
+            tags=[f"issue-{issue_number}"],
             idempotency_key=idempotency_key,
         )
 
@@ -131,6 +157,7 @@ class SessionManager:
             session_id=session_id,
             issue_number=issue_number,
             issue_title=issue_title,
+            issue_user=issue_user,
             repo_full_name=repo_full_name,
             devin_session_url=devin_url,
         )
@@ -142,7 +169,7 @@ class SessionManager:
             body=(
                 f"**Devin is working on this.**\n\n"
                 f"Session: {devin_url}\n\n"
-                f"I'll comment here when a PR is ready."
+                f"Devin will comment here when a PR is ready."
             ),
         )
 
@@ -201,8 +228,10 @@ class SessionManager:
                 )
                 logger.info(f"Session {session_id} finished — PR: {pr_url}")
             elif new_status == "blocked":
-                body = f"**{label}.** Devin needs input before it can continue.\n\nReview: {session['devin_session_url']}"
-                logger.warning(f"Session {session_id} is blocked")
+                # Devin posts its own comment on the issue asking for input — no need to duplicate it
+                logger.warning(f"Session {session_id} is blocked — Devin will comment directly")
+                await observability.update_notified_status(session_id, new_status)
+                return
             elif new_status == "expired":
                 body = f"**{label}.** Session expired without completing.\n\nManual review needed: {session['devin_session_url']}"
                 logger.error(f"Session {session_id} expired")
@@ -216,6 +245,57 @@ class SessionManager:
 
         except Exception as e:
             logger.error(f"Error polling session {session_id}: {e}")
+
+    async def handle_issue_comment(
+        self,
+        issue_number: int,
+        comment_body: str,
+        comment_user: str,
+        repo_full_name: str,
+    ) -> None:
+        session = await observability.get_active_session_by_issue(issue_number, repo_full_name)
+        if not session:
+            return
+
+        session_id = session["session_id"]
+        message = f"{comment_user} replied on GitHub:\n\n{comment_body}"
+        await self.devin.send_message(session_id, message)
+        logger.info(f"Relayed comment from {comment_user} to Devin session {session_id}")
+
+    async def handle_pr_comment(
+        self,
+        pr_number: int,
+        comment_body: str,
+        comment_user: str,
+        repo_full_name: str,
+    ) -> None:
+        session = await observability.get_session_by_pr_number(pr_number, repo_full_name)
+        if not session:
+            return
+        session_id = session["session_id"]
+        message = f"{comment_user} commented on the PR:\n\n{comment_body}"
+        await self.devin.send_message(session_id, message)
+        logger.info(f"Relayed PR comment from {comment_user} to Devin session {session_id}")
+
+    async def handle_issue_closed(
+        self,
+        issue_number: int,
+        repo_full_name: str,
+    ) -> None:
+        session = await observability.get_active_session_by_issue(issue_number, repo_full_name)
+        if not session:
+            # Also check terminal sessions so a closed finished/expired session is archived
+            async def _find_any():
+                all_sessions = await observability.get_all_sessions()
+                for s in all_sessions:
+                    if s["issue_number"] == issue_number and s["repo_full_name"] == repo_full_name:
+                        return s
+                return None
+            session = await _find_any()
+        if not session:
+            return
+        await observability.update_issue_closed(session["session_id"])
+        logger.info(f"Issue #{issue_number} closed — session {session['session_id']} moved to archive")
 
     async def poll_and_update(self) -> None:
         active = await observability.get_active_sessions()

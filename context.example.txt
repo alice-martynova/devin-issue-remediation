@@ -1,0 +1,16 @@
+# Devin context — copy this file to context.txt and fill in your project details.
+# context.txt is gitignored. This file is the committed template.
+#
+# Everything here is prepended to every Devin session prompt, so write it as
+# direct instructions to Devin. Lines starting with # are stripped at runtime.
+
+You are working on a [describe your project — e.g. "Python web application", "fintech API", "open-source data platform"].
+
+Key facts about this codebase:
+- [e.g. "All database access must use parameterized queries — never interpolate user input into SQL strings."]
+- [e.g. "The test suite is run with `pytest tests/` — all tests must pass before opening a PR."]
+- [e.g. "This project follows the Google Python Style Guide."]
+
+When making changes:
+- [e.g. "Prefer minimal diffs — do not reformat unrelated code."]
+- [e.g. "If a fix requires a new dependency, flag it in the PR description."]

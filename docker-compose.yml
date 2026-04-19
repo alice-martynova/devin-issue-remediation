@@ -6,6 +6,7 @@ services:
     env_file: .env
     volumes:
       - sessions_data:/data
+      - ./context.txt:/config/context.txt:ro
     restart: unless-stopped
 
   ngrok:
