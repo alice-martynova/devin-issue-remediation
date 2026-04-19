@@ -52,7 +52,7 @@ STATUS_LABELS = {
 #   - `status_enum`: the authoritative lifecycle state, including `blocked`
 #     when Devin is waiting for a human reply on an issue or PR.
 #
-# We prefer `status_enum` so `blocked` surfaces as "GitHub User Action" on
+# We prefer `status_enum` so `blocked` surfaces as "User Action" on
 # the dashboard instead of being collapsed into "Devin Working".
 _STATUS_MAP: dict[str, str] = {
     # Legacy free-form `status` field values

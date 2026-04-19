@@ -218,7 +218,7 @@ Each session moves through the three user-facing statuses shown on the dashboard
 |------------------|-----------------|------------|
 | **Issue Opened** | Issue received; the Devin session has been created but hasn't started running yet. | Nothing — Devin will pick it up shortly. |
 | **Devin Working** | Devin is actively investigating the issue, editing code, or opening a PR. | Nothing — wait for Devin to finish or ask for input. |
-| **GitHub User Action** | Devin is waiting on you: either it's blocked and asking a question on the issue, it has opened a PR that needs review, or the session finished/expired and needs a manual look. | Open the linked issue or PR and respond — comments you leave there are relayed back into the Devin session automatically. |
+| **User Action** | Devin is waiting on you: either it's blocked and asking a question on the issue, it has opened a PR that needs review, or the session finished/expired and needs a manual look. | Open the linked issue or PR and respond — comments you leave there are relayed back into the Devin session automatically. |
 
 ## Project structure
 
