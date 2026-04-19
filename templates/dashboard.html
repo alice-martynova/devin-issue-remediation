@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="refresh" content="30" />
+  <title>Devin Remediation Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .subtitle { color: #64748b; font-size: 0.875rem; margin-bottom: 2rem; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #1e2330;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+    }
+
+    .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .card .value { font-size: 2rem; font-weight: 700; margin-top: 0.25rem; }
+    .card.green .value  { color: #34d399; }
+    .card.blue .value   { color: #60a5fa; }
+    .card.yellow .value { color: #fbbf24; }
+    .card.purple .value { color: #a78bfa; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #1e2330;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 0.875rem;
+    }
+
+    th {
+      background: #161b27;
+      padding: 0.75rem 1rem;
+      text-align: left;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      border-bottom: 1px solid #2d3748;
+    }
+
+    td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #1a2033;
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #242b3d; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-working  { background: #1d3a5c; color: #60a5fa; }
+    .badge-finished { background: #064e3b; color: #34d399; }
+    .badge-blocked  { background: #451a03; color: #fbbf24; }
+    .badge-expired  { background: #3b1a1a; color: #f87171; }
+    .badge-unknown  { background: #1e2330; color: #94a3b8; }
+
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .empty { text-align: center; padding: 3rem; color: #4a5568; }
+
+    .refresh-note {
+      text-align: right;
+      font-size: 0.75rem;
+      color: #4a5568;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Devin Remediation Dashboard</h1>
+  <p class="subtitle">Apache Superset · Security vulnerability remediation · auto-refreshes every 30s</p>
+
+  <div class="metrics">
+    <div class="card blue">
+      <div class="label">Total Sessions</div>
+      <div class="value">{{ metrics.total }}</div>
+    </div>
+    <div class="card green">
+      <div class="label">Finished</div>
+      <div class="value">{{ metrics.by_status.get('finished', 0) }}</div>
+    </div>
+    <div class="card yellow">
+      <div class="label">Working</div>
+      <div class="value">{{ metrics.by_status.get('working', 0) }}</div>
+    </div>
+    <div class="card purple">
+      <div class="label">PRs Created</div>
+      <div class="value">{{ metrics.prs_created }}</div>
+    </div>
+    <div class="card green">
+      <div class="label">Success Rate</div>
+      <div class="value">{{ metrics.success_rate }}%</div>
+    </div>
+  </div>
+
+  {% if sessions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Issue</th>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Pull Request</th>
+        <th>Devin Session</th>
+        <th>Started</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td>#{{ s.issue_number }}</td>
+        <td>{{ s.issue_title }}</td>
+        <td>
+          <span class="badge badge-{{ s.devin_status or 'unknown' }}">
+            {{ s.devin_status or 'unknown' }}
+          </span>
+        </td>
+        <td>
+          {% if s.pr_url %}
+            <a href="{{ s.pr_url }}" target="_blank">View PR</a>
+          {% else %}
+            <span style="color:#4a5568">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if s.devin_session_url %}
+            <a href="{{ s.devin_session_url }}" target="_blank">Open</a>
+          {% else %}
+            <span style="color:#4a5568">—</span>
+          {% endif %}
+        </td>
+        <td style="color:#64748b">{{ s.created_at[:19].replace('T',' ') }}</td>
+        <td style="color:#64748b">{{ s.updated_at[:19].replace('T',' ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No sessions yet. Create an issue in your fork to trigger remediation.</div>
+  {% endif %}
+
+  <p class="refresh-note">Page auto-refreshes every 30 seconds</p>
+</body>
+</html>
