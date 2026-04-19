@@ -56,18 +56,26 @@ Store this as `DEVIN_API_KEY` in your `.env` file. Keep it secret — anyone wit
 
 ### GitHub Personal Access Token (PAT)
 
-**What it is:** A token that lets the app post comments on GitHub issues and read repository information on your behalf.
+**What it is:** A token that lets the app post comments on GitHub issues and read repository information on behalf of a GitHub account.
 
-**Why it's needed:** When Devin finishes working, the app posts a comment on the issue with the PR link. This comment appears under your GitHub account (the account that owns the token).
+**Why it's needed:** When Devin finishes working, or when a session needs user input, the app posts a comment on the issue. This comment appears under whichever GitHub account owns the token.
+
+> ⚠️ **Use a dedicated bot account — not your personal GitHub account.**
+>
+> The app needs to tell its own automated comments apart from human replies so that human replies get relayed back into the Devin session. It does this by comparing the commenter's login against the token owner's login and ignoring matches as bot comments (see [`src/main.py`](src/main.py) — the `_bot_github_user` check).
+>
+> If you use your own PAT, every comment **you** make on an issue is also treated as a bot comment and **silently dropped**, so Devin never sees your reply and stays blocked forever. Always authenticate as a distinct bot user (e.g. `yourname-devin-bot`) that is separate from the humans who file issues and reply on them.
 
 **How to get it:**
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens).
-2. Click **Generate new token (classic)**.
-3. Give it a descriptive name (e.g. `devin-issue-remediation`).
-4. Select the following scopes:
+1. Create (or sign in to) a **dedicated GitHub account** to act as the bot. Do not reuse the account you use as a human contributor on the target repos.
+2. Invite that bot account as a collaborator with **write** access on every repository the app will operate on (Settings → Collaborators → Add people). Write access is required so the bot can post comments and read PR merge status.
+3. While signed in as the bot account, go to [github.com/settings/tokens](https://github.com/settings/tokens).
+4. Click **Generate new token (classic)**.
+5. Give it a descriptive name (e.g. `devin-issue-remediation`).
+6. Select the following scopes:
    - `repo` — full repository access (needed to post comments and read PR status)
    - `read:user` — needed to identify the bot account and prevent comment loops
-5. Click **Generate token** and copy the value immediately — GitHub only shows it once.
+7. Click **Generate token** and copy the value immediately — GitHub only shows it once.
 
 Store this as `GITHUB_TOKEN` in your `.env` file.
 
