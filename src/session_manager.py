@@ -4,9 +4,9 @@ import os
 import re
 from typing import Optional
 
+from . import observability
 from .devin_client import DevinClient
 from .github_client import GitHubClient
-from . import observability
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def _load_context() -> str:
     except OSError:
         raw = _CONTEXT_ENV
 
-    lines = [l for l in raw.splitlines() if not l.startswith("#")]
+    lines = [line for line in raw.splitlines() if not line.startswith("#")]
     return "\n".join(lines).strip()
 
 
