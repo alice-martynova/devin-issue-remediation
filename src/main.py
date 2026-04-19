@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 
 DEVIN_API_KEY = os.environ["DEVIN_API_KEY"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"]
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
+POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT_SECONDS", "120"))
 
 devin_client = DevinClient(api_key=DEVIN_API_KEY)
 github_client = GitHubClient(token=GITHUB_TOKEN)
@@ -35,7 +36,12 @@ templates = Jinja2Templates(directory="templates")
 async def _background_poller() -> None:
     while True:
         try:
-            await session_manager.poll_and_update()
+            await asyncio.wait_for(
+                session_manager.poll_and_update(),
+                timeout=POLL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Poll cycle exceeded {POLL_TIMEOUT}s timeout — skipping")
         except Exception as exc:
             logger.error(f"Poller error: {exc}")
         await asyncio.sleep(POLL_INTERVAL)
@@ -94,10 +100,9 @@ def _verify_signature(payload: bytes, signature: str, secret: str) -> bool:
 async def github_webhook(request: Request):
     payload_bytes = await request.body()
 
-    if GITHUB_WEBHOOK_SECRET:
-        sig = request.headers.get("X-Hub-Signature-256", "")
-        if not _verify_signature(payload_bytes, sig, GITHUB_WEBHOOK_SECRET):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_signature(payload_bytes, sig, GITHUB_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     event = request.headers.get("X-GitHub-Event", "")
     payload = await request.json()

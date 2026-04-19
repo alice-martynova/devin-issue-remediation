@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -9,6 +10,49 @@ from . import observability
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"finished", "expired"}
+
+# Human-readable labels for the dashboard and GitHub comments
+STATUS_LABELS = {
+    "working":  "Devin at work",
+    "blocked":  "Needs user input",
+    "finished": "Issue addressed",
+    "expired":  "Timed out",
+}
+
+# Map Devin API status values to our internal vocabulary.
+_STATUS_MAP: dict[str, str] = {
+    "running":   "working",
+    "stopped":   "finished",
+    "suspended": "expired",
+}
+
+
+def _normalize_status(raw: str) -> str:
+    return _STATUS_MAP.get(raw, raw)
+
+
+def _extract_pr_url(details: dict) -> Optional[str]:
+    pr = details.get("pull_request")
+    if isinstance(pr, dict):
+        url = pr.get("html_url") or pr.get("url")
+        if url:
+            return url
+    structured = details.get("structured_output")
+    if isinstance(structured, dict):
+        url = (
+            structured.get("pr_url")
+            or structured.get("pull_request_url")
+            or structured.get("pull_request", {}).get("html_url")
+            or structured.get("pull_request", {}).get("url")
+        )
+        if url:
+            return url
+    return None
+
+
+def _extract_pr_number(pr_url: str) -> Optional[int]:
+    match = re.search(r"/pull/(\d+)", pr_url)
+    return int(match.group(1)) if match else None
 
 
 def _slugify(text: str) -> str:
@@ -31,14 +75,15 @@ Vulnerability Details:
 {issue_body}
 
 Instructions:
-1. Clone the repository (branch: master)
-2. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
-3. Apply the minimal, targeted fix described above — do not refactor or change unrelated code
-4. Run the existing tests relevant to the changed file and capture the output
-5. Open a pull request against master with:
+1. Use your GitHub integration to access the repository — do not manually clone via the command line.
+2. Check out branch: master
+3. Create a new branch named: fix/issue-{issue_number}-{_slugify(issue_title)}
+4. Apply the minimal, targeted fix described above — do not refactor or change unrelated code.
+5. Run the existing tests relevant to the changed file and capture the output.
+6. Open a pull request against master with:
    - Title: "fix: {issue_title}"
    - Body: "Fixes #{issue_number}\\n\\n[Brief description of what was changed and why]"
-6. Post a follow-up comment on the PR with the test results in this format:
+7. Post a follow-up comment on the PR with the test results in this format:
    ## Test Results
    **Status:** PASSED / FAILED
    **Command run:** `<the exact command used>`
@@ -64,18 +109,19 @@ class SessionManager:
     ) -> Optional[str]:
         owner, repo = repo_full_name.split("/", 1)
 
-        # Deduplicate — skip if we already have a session for this issue
         if await observability.session_exists_for_issue(issue_number, repo_full_name):
             logger.info(f"Session already exists for #{issue_number}, skipping")
             return None
 
         prompt = build_devin_prompt(issue_number, issue_title, issue_body, repo_full_name)
+        idempotency_key = f"issue-{issue_number}-{repo_full_name}"
 
         logger.info(f"Creating Devin session for issue #{issue_number}: {issue_title}")
         result = await self.devin.create_session(
             prompt=prompt,
             title=f"Fix: {issue_title[:80]}",
             tags=[f"issue-{issue_number}", "security", "superset"],
+            idempotency_key=idempotency_key,
         )
 
         session_id = result["session_id"]
@@ -103,74 +149,77 @@ class SessionManager:
         logger.info(f"Session {session_id} started for issue #{issue_number}")
         return session_id
 
+    async def _check_pr_merged(self, session: dict) -> None:
+        pr_url = session.get("pr_url")
+        if not pr_url or session.get("pr_merged"):
+            return
+        owner, repo = session["repo_full_name"].split("/", 1)
+        pr_number = _extract_pr_number(pr_url)
+        if not pr_number:
+            return
+        try:
+            merged = await self.github.is_pr_merged(owner, repo, pr_number)
+            if merged:
+                await observability.update_pr_merged(session["session_id"])
+                logger.info(f"PR #{pr_number} merged for issue #{session['issue_number']}")
+        except Exception as e:
+            logger.error(f"Error checking PR merge for session {session['session_id']}: {e}")
+
+    async def _poll_one(self, session: dict) -> None:
+        session_id = session["session_id"]
+        owner, repo = session["repo_full_name"].split("/", 1)
+        issue_number = session["issue_number"]
+
+        await self._check_pr_merged(session)
+
+        if session.get("devin_status") in TERMINAL_STATUSES:
+            return
+
+        try:
+            details = await self.devin.get_session(session_id)
+            raw_status = details.get("status", "working")
+            new_status = _normalize_status(raw_status)
+            pr_url = _extract_pr_url(details)
+
+            await observability.update_session(
+                session_id=session_id,
+                devin_status=new_status,
+                pr_url=pr_url,
+            )
+
+            last_notified = session.get("last_notified_status")
+            if new_status == last_notified:
+                return
+
+            label = STATUS_LABELS.get(new_status, new_status)
+
+            if new_status == "finished":
+                body = (
+                    f"**{label}.** Devin has opened a fix PR: {pr_url}"
+                    if pr_url
+                    else f"**{label}.** No PR was found. Review manually: {session['devin_session_url']}"
+                )
+                logger.info(f"Session {session_id} finished — PR: {pr_url}")
+            elif new_status == "blocked":
+                body = f"**{label}.** Devin needs input before it can continue.\n\nReview: {session['devin_session_url']}"
+                logger.warning(f"Session {session_id} is blocked")
+            elif new_status == "expired":
+                body = f"**{label}.** Session expired without completing.\n\nManual review needed: {session['devin_session_url']}"
+                logger.error(f"Session {session_id} expired")
+            else:
+                return
+
+            await self.github.post_comment(
+                owner=owner, repo=repo, issue_number=issue_number, body=body
+            )
+            await observability.update_notified_status(session_id, new_status)
+
+        except Exception as e:
+            logger.error(f"Error polling session {session_id}: {e}")
+
     async def poll_and_update(self) -> None:
         active = await observability.get_active_sessions()
         if not active:
             return
-
         logger.info(f"Polling {len(active)} active session(s)")
-
-        for session in active:
-            session_id = session["session_id"]
-            try:
-                details = await self.devin.get_session(session_id)
-                new_status = details.get("status_enum") or details.get("status", "working")
-                pr_url: Optional[str] = None
-                if details.get("pull_request"):
-                    pr_url = details["pull_request"].get("url")
-
-                await observability.update_session(
-                    session_id=session_id,
-                    devin_status=new_status,
-                    pr_url=pr_url,
-                )
-
-                owner, repo = session["repo_full_name"].split("/", 1)
-                issue_number = session["issue_number"]
-
-                if new_status == "finished":
-                    if pr_url:
-                        await self.github.post_comment(
-                            owner=owner,
-                            repo=repo,
-                            issue_number=issue_number,
-                            body=f"**Devin has opened a fix PR:** {pr_url}",
-                        )
-                        logger.info(f"Session {session_id} finished — PR: {pr_url}")
-                    else:
-                        await self.github.post_comment(
-                            owner=owner,
-                            repo=repo,
-                            issue_number=issue_number,
-                            body=(
-                                f"**Devin session finished** but no PR was found.\n\n"
-                                f"Review the session manually: {session['devin_session_url']}"
-                            ),
-                        )
-
-                elif new_status == "blocked":
-                    await self.github.post_comment(
-                        owner=owner,
-                        repo=repo,
-                        issue_number=issue_number,
-                        body=(
-                            f"**Devin is blocked** and needs input.\n\n"
-                            f"Review: {session['devin_session_url']}"
-                        ),
-                    )
-                    logger.warning(f"Session {session_id} is blocked")
-
-                elif new_status == "expired":
-                    await self.github.post_comment(
-                        owner=owner,
-                        repo=repo,
-                        issue_number=issue_number,
-                        body=(
-                            f"**Devin session expired** without completing.\n\n"
-                            f"Manual review needed: {session['devin_session_url']}"
-                        ),
-                    )
-                    logger.error(f"Session {session_id} expired")
-
-            except Exception as e:
-                logger.error(f"Error polling session {session_id}: {e}")
+        await asyncio.gather(*[self._poll_one(s) for s in active], return_exceptions=True)

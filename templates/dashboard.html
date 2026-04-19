@@ -70,6 +70,7 @@
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: #242b3d; }
 
+    /* Devin status badges */
     .badge {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -78,27 +79,33 @@
       font-weight: 600;
     }
     .badge-working  { background: #1d3a5c; color: #60a5fa; }
-    .badge-finished { background: #064e3b; color: #34d399; }
     .badge-blocked  { background: #451a03; color: #fbbf24; }
+    .badge-finished { background: #064e3b; color: #34d399; }
     .badge-expired  { background: #3b1a1a; color: #f87171; }
     .badge-unknown  { background: #1e2330; color: #94a3b8; }
+
+    /* PR merged badges */
+    .badge-merged { background: #1a2e4a; color: #818cf8; }
+    .badge-open   { background: #064e3b; color: #34d399; }
+    .badge-none   { color: #4a5568; }
 
     a { color: #60a5fa; text-decoration: none; }
     a:hover { text-decoration: underline; }
 
     .empty { text-align: center; padding: 3rem; color: #4a5568; }
-
-    .refresh-note {
-      text-align: right;
-      font-size: 0.75rem;
-      color: #4a5568;
-      margin-top: 1rem;
-    }
+    .refresh-note { text-align: right; font-size: 0.75rem; color: #4a5568; margin-top: 1rem; }
   </style>
 </head>
 <body>
   <h1>Devin Remediation Dashboard</h1>
   <p class="subtitle">Apache Superset · Security vulnerability remediation · auto-refreshes every 30s</p>
+
+  {% set status_labels = {
+    "working":  "Devin at work",
+    "blocked":  "Needs user input",
+    "finished": "Issue addressed",
+    "expired":  "Timed out"
+  } %}
 
   <div class="metrics">
     <div class="card blue">
@@ -106,16 +113,16 @@
       <div class="value">{{ metrics.total }}</div>
     </div>
     <div class="card green">
-      <div class="label">Finished</div>
+      <div class="label">Issue Addressed</div>
       <div class="value">{{ metrics.by_status.get('finished', 0) }}</div>
     </div>
     <div class="card yellow">
-      <div class="label">Working</div>
+      <div class="label">Devin at Work</div>
       <div class="value">{{ metrics.by_status.get('working', 0) }}</div>
     </div>
     <div class="card purple">
-      <div class="label">PRs Created</div>
-      <div class="value">{{ metrics.prs_created }}</div>
+      <div class="label">PRs Merged</div>
+      <div class="value">{{ metrics.prs_merged }}</div>
     </div>
     <div class="card green">
       <div class="label">Success Rate</div>
@@ -129,7 +136,8 @@
       <tr>
         <th>Issue</th>
         <th>Title</th>
-        <th>Status</th>
+        <th>Devin Status</th>
+        <th>PR Status</th>
         <th>Pull Request</th>
         <th>Devin Session</th>
         <th>Started</th>
@@ -143,8 +151,19 @@
         <td>{{ s.issue_title }}</td>
         <td>
           <span class="badge badge-{{ s.devin_status or 'unknown' }}">
-            {{ s.devin_status or 'unknown' }}
+            {{ status_labels.get(s.devin_status, s.devin_status or 'unknown') }}
           </span>
+        </td>
+        <td>
+          {% if s.pr_url %}
+            {% if s.pr_merged %}
+              <span class="badge badge-merged">PR Merged</span>
+            {% else %}
+              <span class="badge badge-open">Open</span>
+            {% endif %}
+          {% else %}
+            <span class="badge-none">—</span>
+          {% endif %}
         </td>
         <td>
           {% if s.pr_url %}

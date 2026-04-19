@@ -15,17 +15,27 @@ async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
-                session_id         TEXT PRIMARY KEY,
-                issue_number       INTEGER NOT NULL,
-                issue_title        TEXT NOT NULL,
-                repo_full_name     TEXT NOT NULL,
-                devin_status       TEXT DEFAULT 'working',
-                pr_url             TEXT,
-                devin_session_url  TEXT,
-                created_at         TEXT NOT NULL,
-                updated_at         TEXT NOT NULL
+                session_id           TEXT PRIMARY KEY,
+                issue_number         INTEGER NOT NULL,
+                issue_title          TEXT NOT NULL,
+                repo_full_name       TEXT NOT NULL,
+                devin_status         TEXT DEFAULT 'working',
+                last_notified_status TEXT,
+                pr_url               TEXT,
+                pr_merged            INTEGER DEFAULT 0,
+                devin_session_url    TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
             )
         """)
+        for col, definition in [
+            ("last_notified_status", "TEXT"),
+            ("pr_merged", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # column already exists
         await db.commit()
     logger.info(f"Database initialised at {DB_PATH}")
 
@@ -43,8 +53,9 @@ async def record_session(
             """
             INSERT OR IGNORE INTO sessions
                 (session_id, issue_number, issue_title, repo_full_name,
-                 devin_status, devin_session_url, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'working', ?, ?, ?)
+                 devin_status, last_notified_status, devin_session_url,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'working', NULL, ?, ?, ?)
             """,
             (session_id, issue_number, issue_title, repo_full_name,
              devin_session_url, now, now),
@@ -70,6 +81,16 @@ async def update_session(
         await db.commit()
 
 
+async def update_notified_status(session_id: str, status: str) -> None:
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET last_notified_status = ?, updated_at = ? WHERE session_id = ?",
+            (status, now, session_id),
+        )
+        await db.commit()
+
+
 async def session_exists_for_issue(issue_number: int, repo_full_name: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -89,9 +110,32 @@ async def get_all_sessions() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+async def update_pr_merged(session_id: str) -> None:
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET pr_merged = 1, updated_at = ? WHERE session_id = ?",
+            (now, session_id),
+        )
+        await db.commit()
+
+
 async def get_active_sessions() -> list[dict]:
-    all_sessions = await get_all_sessions()
-    return [s for s in all_sessions if s["devin_status"] not in TERMINAL_STATUSES]
+    """Returns sessions that still need Devin polling or PR merge checking."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" * len(TERMINAL_STATUSES))
+        cursor = await db.execute(
+            f"""
+            SELECT * FROM sessions
+            WHERE devin_status NOT IN ({placeholders})
+               OR (pr_url IS NOT NULL AND pr_merged = 0)
+            ORDER BY created_at DESC
+            """,
+            tuple(TERMINAL_STATUSES),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def get_metrics() -> dict:
@@ -110,4 +154,5 @@ async def get_metrics() -> dict:
         "by_status": by_status,
         "success_rate": success_rate,
         "prs_created": sum(1 for s in sessions if s.get("pr_url")),
+        "prs_merged": sum(1 for s in sessions if s.get("pr_merged")),
     }
