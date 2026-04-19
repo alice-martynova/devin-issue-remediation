@@ -4,7 +4,7 @@ import os
 import re
 from typing import Optional
 
-from . import observability
+from . import observability, prompt_sanitizer
 from .devin_client import DevinClient
 from .github_client import GitHubClient
 
@@ -301,7 +301,11 @@ class SessionManager:
             return
 
         session_id = session["session_id"]
-        message = f"{comment_user} replied on GitHub:\n\n{comment_body}"
+        message = prompt_sanitizer.sanitize_relay(
+            source=f"GitHub issue #{issue_number} in {repo_full_name}",
+            commenter=comment_user,
+            body=comment_body,
+        )
         await self.devin.send_message(session_id, message)
         logger.info(f"Relayed comment from {comment_user} to Devin session {session_id}")
 
@@ -316,7 +320,11 @@ class SessionManager:
         if not session:
             return
         session_id = session["session_id"]
-        message = f"{comment_user} commented on the PR:\n\n{comment_body}"
+        message = prompt_sanitizer.sanitize_relay(
+            source=f"GitHub PR #{pr_number} in {repo_full_name}",
+            commenter=comment_user,
+            body=comment_body,
+        )
         await self.devin.send_message(session_id, message)
         logger.info(f"Relayed PR comment from {comment_user} to Devin session {session_id}")
 
