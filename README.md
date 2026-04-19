@@ -220,18 +220,6 @@ Each session moves through the three user-facing statuses shown on the dashboard
 | **Devin Working** | Devin is actively investigating the issue, editing code, or opening a PR. | Nothing — wait for Devin to finish or ask for input. |
 | **GitHub User Action** | Devin is waiting on you: either it's blocked and asking a question on the issue, it has opened a PR that needs review, or the session finished/expired and needs a manual look. | Open the linked issue or PR and respond — comments you leave there are relayed back into the Devin session automatically. |
 
-Under the hood each row also carries a finer-grained `devin_status` (mirroring Devin's [`status_enum`](https://docs.devin.ai/api-reference/v1/sessions/retrieve-details-about-an-existing-session)):
-
-| `devin_status` | Dashboard status | Meaning |
-|----------------|------------------|---------|
-| `new` | Issue Opened | Session queued, not yet started |
-| `working` | Devin Working | Devin is actively running |
-| `blocked` | GitHub User Action | Devin is waiting for a reply on the issue or PR |
-| `finished` | GitHub User Action | Devin opened a PR; review it and merge or request changes |
-| `expired` | GitHub User Action | Session timed out before completing — review manually |
-
-Sessions are archived off the **Current** tab once their PR is merged or the issue is closed.
-
 ## Project structure
 
 ```
