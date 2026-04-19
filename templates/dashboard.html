@@ -139,7 +139,6 @@
       font-weight: 600;
     }
     /* User-facing status badges */
-    .badge-issue-opened  { background: #1e2a3a; color: #94a3b8; }
     .badge-devin-working { background: #1d3a5c; color: #60a5fa; }
     .badge-devin-action  { background: #2d1a45; color: #c084fc; }
     .badge-user-action   { background: #451a03; color: #fbbf24; }
@@ -164,9 +163,9 @@
   {% set current  = sessions | rejectattr('pr_merged') | rejectattr('issue_closed') | list %}
 
   {# Derive counts using the same display-status logic as the table rows #}
-  {% set cnt_issue_opened  = current | selectattr('devin_status', 'equalto', 'new')     | list | length %}
-  {% set cnt_devin_working = current | selectattr('devin_status', 'equalto', 'working') | list | length %}
-  {% set cnt_user_action   = current | length - cnt_issue_opened - cnt_devin_working %}
+  {# 'new' sessions haven't been polled yet but are effectively Devin-working #}
+  {% set cnt_devin_working = current | selectattr('devin_status', 'in', ['new', 'working']) | list | length %}
+  {% set cnt_user_action   = current | length - cnt_devin_working %}
 
   {# ── Metric cards ──────────────────────────────────────── #}
   <div class="metrics">
@@ -179,11 +178,6 @@
       <div class="label">User Action</div>
       <div class="value">{{ cnt_user_action }}</div>
       <div class="sub">comment on issue or review PR</div>
-    </div>
-    <div class="card" style="background:#1e2330;border:1px solid #2d3748;border-radius:8px;padding:1.25rem 1.5rem">
-      <div class="label">Issue Opened</div>
-      <div class="value" style="color:#94a3b8">{{ cnt_issue_opened }}</div>
-      <div class="sub">queued, not yet started</div>
     </div>
   </div>
 
@@ -199,7 +193,6 @@
       <input  id="cur-text"   type="text"   placeholder="Search issue # or title…" oninput="filterTable('current')">
       <select id="cur-status" onchange="filterTable('current')">
         <option value="">All statuses</option>
-        <option value="issue-opened">Issue Opened</option>
         <option value="devin-working">Devin Working</option>
         <option value="user-action">User Action</option>
       </select>
@@ -224,11 +217,10 @@
         {% for s in current %}
         {% set is_stale = s.devin_status not in ('finished', 'expired') and s.age_minutes > 120 %}
 
-        {# Compute the user-facing status and its display label #}
-        {% if s.devin_status == 'new' %}
-          {% set display_status = 'issue-opened' %}
-          {% set status_label   = 'Issue Opened' %}
-        {% elif s.devin_status == 'working' %}
+        {# Compute the user-facing status and its display label. Sessions in
+           the initial 'new' state (webhook received, Devin not yet polled)
+           are rendered as 'Devin Working' since no distinct action is needed. #}
+        {% if s.devin_status in ('new', 'working') %}
           {% set display_status = 'devin-working' %}
           {% set status_label   = 'Devin Working' %}
         {% else %}
