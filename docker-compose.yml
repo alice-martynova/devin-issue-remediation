@@ -4,6 +4,11 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Forwarded from the host so `./run` can toggle verbose logging
+      # without editing .env. Fall back to INFO for a plain `docker compose up`.
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - UVICORN_LOG_LEVEL=${UVICORN_LOG_LEVEL:-info}
     volumes:
       - sessions_data:/data
       - ./context.txt:/config/context.txt:ro

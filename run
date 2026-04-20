@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# run — single entrypoint for building, starting, and tailing the
+# devin-issue-remediation stack. Hides docker-compose behind verbose,
+# human-friendly terminal output so operators never need to remember
+# container names, build flags, or log commands.
+#
+# Usage:
+#   ./run [--quiet] <command> [extra args...]
+#
+# Run `./run help` for the full command reference.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# -------- flags -----------------------------------------------------------
+QUIET=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -q|--quiet) QUIET=1; shift ;;
+    -v|--verbose) QUIET=0; shift ;; # default is already verbose; accepted for clarity
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+CMD="${1:-help}"
+shift || true
+
+# -------- colors / section headers ---------------------------------------
+if [[ -t 1 ]]; then
+  C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'; C_CYAN=$'\033[36m'
+  C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_RESET=$'\033[0m'
+else
+  C_BOLD=""; C_DIM=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_RESET=""
+fi
+
+section() { printf '\n%s=== %s ===%s\n' "$C_BOLD$C_CYAN" "$*" "$C_RESET"; }
+info()    { printf '%s[run]%s %s\n' "$C_CYAN" "$C_RESET" "$*"; }
+warn()    { printf '%s[run]%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+err()     { printf '%s[run]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+ok()      { printf '%s[run]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+
+# -------- compose abstraction --------------------------------------------
+# Detect whichever compose variant is installed. We never call `docker` or
+# `docker-compose` directly outside this helper so the rest of the script
+# stays portable.
+detect_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+  else
+    err "Docker Compose is not installed. Install Docker Desktop from https://docs.docker.com/get-docker/ and retry."
+    exit 127
+  fi
+}
+
+check_daemon() {
+  if ! docker info >/dev/null 2>&1; then
+    err "Cannot reach the Docker daemon. Start Docker Desktop (or 'sudo systemctl start docker') and retry."
+    exit 125
+  fi
+}
+
+check_env_file() {
+  if [[ ! -f .env ]]; then
+    err ".env is missing. Copy .env.example to .env and fill in the four required values."
+    err "  cp .env.example .env"
+    exit 2
+  fi
+}
+
+compose() {
+  "${COMPOSE[@]}" "$@"
+}
+
+# When verbose (default), surface full BuildKit step output and plumb a
+# DEBUG-level app log through to the container via env vars that the app
+# and Dockerfile both consult.
+build_env() {
+  if [[ $QUIET -eq 1 ]]; then
+    BUILDKIT_PROGRESS=auto
+    APP_LOG_LEVEL=info
+  else
+    BUILDKIT_PROGRESS=plain
+    APP_LOG_LEVEL=debug
+  fi
+  export DOCKER_BUILDKIT=1
+  export BUILDKIT_PROGRESS
+  export LOG_LEVEL="$APP_LOG_LEVEL"
+  export UVICORN_LOG_LEVEL="$APP_LOG_LEVEL"
+}
+
+# -------- commands --------------------------------------------------------
+cmd_build() {
+  section "Building images"
+  build_env
+  local build_args=()
+  [[ $QUIET -eq 0 ]] && build_args+=(--progress=plain)
+  compose build "${build_args[@]}" "$@"
+  ok "Build complete."
+}
+
+cmd_start() {
+  section "Starting devin-issue-remediation"
+  build_env
+  info "Log level: ${LOG_LEVEL} (use --quiet for info-level logs)"
+
+  local build_args=()
+  [[ $QUIET -eq 0 ]] && build_args+=(--progress=plain)
+  section "Building images"
+  compose build "${build_args[@]}"
+
+  section "Launching containers"
+  compose up -d
+
+  section "Container status"
+  compose ps
+
+  section "Streaming logs (Ctrl+C to detach — containers keep running)"
+  info "Use './run stop' to stop them, './run logs' to re-attach."
+  # --no-log-prefix keeps the output readable; our own prefixing would
+  # clash with the app's timestamped log format.
+  compose logs -f --tail=200 --timestamps
+}
+
+cmd_stop() {
+  section "Stopping containers"
+  detect_compose
+  compose down "$@"
+  ok "Stopped."
+}
+
+cmd_restart() {
+  section "Restarting containers"
+  detect_compose
+  compose restart "$@"
+  compose ps
+}
+
+cmd_rebuild() {
+  section "Rebuilding from scratch (no cache)"
+  build_env
+  compose build --no-cache --progress=plain "$@"
+  ok "Rebuild complete. Run './run start' to launch."
+}
+
+cmd_logs() {
+  section "Following logs"
+  detect_compose
+  compose logs -f --tail=200 --timestamps "$@"
+}
+
+cmd_status() {
+  section "Container status"
+  detect_compose
+  compose ps
+  section "Resource usage"
+  # --no-stream prints a single snapshot instead of a live TUI so the
+  # output is scriptable and always returns to the prompt. The unquoted
+  # command substitution is intentional: docker stats expects each
+  # container id as a separate positional argument, so we rely on
+  # bash word-splitting the newline-separated ids from `compose ps -q`.
+  local ids
+  ids=$(compose ps -q 2>/dev/null || true)
+  if [[ -n "$ids" ]]; then
+    # shellcheck disable=SC2086
+    docker stats --no-stream $ids || true
+  else
+    info "No containers running."
+  fi
+}
+
+cmd_shell() {
+  section "Opening shell in app container"
+  detect_compose
+  local service="${1:-app}"
+  compose exec "$service" /bin/sh
+}
+
+cmd_help() {
+  cat <<EOF
+${C_BOLD}devin-issue-remediation — ./run${C_RESET}
+
+A single terminal entrypoint for the whole stack. You never need to invoke
+docker or docker compose directly.
+
+${C_BOLD}Usage:${C_RESET}
+  ./run [--quiet] <command> [args...]
+
+${C_BOLD}Commands:${C_RESET}
+  start      Build images and start containers, then stream logs in the
+             terminal. Verbose build + DEBUG-level app logs by default.
+  stop       Stop and remove containers (volumes preserved).
+  restart    Restart running containers without rebuilding.
+  rebuild    Force a clean rebuild with no cache.
+  build      Build images only (do not start containers).
+  logs       Tail logs from the running stack (timestamped).
+  status     Show container and resource status.
+  shell      Open an interactive shell inside the app container.
+  help       Show this help text.
+
+${C_BOLD}Flags:${C_RESET}
+  --quiet / -q   Suppress verbose build output and use INFO-level app logs.
+  --verbose / -v Force verbose mode (default).
+
+${C_BOLD}Examples:${C_RESET}
+  ./run start          # full build + start + streaming logs
+  ./run --quiet start  # same, but with concise output
+  ./run logs           # reattach to a stack started earlier
+  ./run rebuild        # no-cache rebuild (run before ./run start)
+  ./run shell          # drop into a shell inside the app container
+EOF
+}
+
+# -------- dispatch --------------------------------------------------------
+case "$CMD" in
+  start|up)     detect_compose; check_daemon; check_env_file; cmd_start "$@" ;;
+  stop|down)    detect_compose; check_daemon; cmd_stop "$@" ;;
+  restart)      detect_compose; check_daemon; cmd_restart "$@" ;;
+  rebuild)      detect_compose; check_daemon; check_env_file; cmd_rebuild "$@" ;;
+  build)        detect_compose; check_daemon; check_env_file; cmd_build "$@" ;;
+  logs)         detect_compose; check_daemon; cmd_logs "$@" ;;
+  status|ps)    detect_compose; check_daemon; cmd_status "$@" ;;
+  shell|exec)   detect_compose; check_daemon; cmd_shell "$@" ;;
+  help|-h|--help) cmd_help ;;
+  *)
+    err "Unknown command: $CMD"
+    cmd_help
+    exit 64
+    ;;
+esac
