@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Awaitable
@@ -160,13 +161,30 @@ async def github_webhook(request: Request):
     if event == "issues" and action in ("opened", "reopened"):
         issue = payload["issue"]
         repo = payload["repository"]
+        # Record an `issue-opened` placeholder synchronously so the dashboard
+        # shows the issue the moment the webhook arrives — before we try to
+        # create the Devin session. If Devin rejects the create call (token
+        # limits, 5xx, etc.) the handler flips this row to `devin-stopped`
+        # instead of leaving the dashboard empty.
+        placeholder_id = await observability.record_issue_opened(
+            issue_number=issue["number"],
+            issue_title=issue["title"],
+            issue_user=issue["user"]["login"],
+            repo_full_name=repo["full_name"],
+        )
+        if placeholder_id is None:
+            logger.info(
+                "Duplicate issues.%s delivery for #%d — placeholder already exists",
+                action, issue["number"],
+            )
+            return {"status": "accepted", "issue_number": issue["number"]}
         _spawn(
             "handle_issue_opened",
             session_manager.handle_issue_opened(
+                placeholder_id=placeholder_id,
                 issue_number=issue["number"],
                 issue_title=issue["title"],
                 issue_body=issue.get("body") or "",
-                issue_user=issue["user"]["login"],
                 repo_full_name=repo["full_name"],
                 default_branch=repo.get("default_branch") or "main",
             ),
@@ -175,6 +193,7 @@ async def github_webhook(request: Request):
                 "delivery_id": delivery_id,
                 "issue_number": issue["number"],
                 "repo_full_name": repo["full_name"],
+                "placeholder_id": placeholder_id,
             },
         )
         logger.info(f"Accepted issue #{issue['number']}: {issue['title']}")
@@ -202,15 +221,31 @@ async def github_webhook(request: Request):
     if event == "issue_comment" and action == "created":
         comment = payload["comment"]
         commenter = comment["user"]["login"]
-        # Devin's own comments on the issue/PR must not be relayed back into
-        # its own session. All app-authored status updates are posted by
-        # Devin itself from inside the session, so this is the only identity
-        # we need to filter here.
-        if commenter == "devin-ai-integration[bot]":
-            return {"status": "ignored", "reason": "bot_comment"}
         issue = payload["issue"]
         repo = payload["repository"]
         is_pr_comment = "pull_request" in issue
+        # Devin's own comments on the issue / PR must not be relayed back
+        # into its own session. However, a non-marker comment by Devin on
+        # the *issue* is a signal that Devin is waiting on the reporter —
+        # use it to flip the session to User Action even if the Devin API
+        # polling cycle hasn't caught up yet.
+        if commenter == "devin-ai-integration[bot]":
+            if not is_pr_comment:
+                _spawn(
+                    "handle_devin_bot_issue_comment",
+                    session_manager.handle_devin_bot_issue_comment(
+                        issue_number=issue["number"],
+                        comment_body=comment.get("body") or "",
+                        repo_full_name=repo["full_name"],
+                    ),
+                    {
+                        "event": event,
+                        "delivery_id": delivery_id,
+                        "issue_number": issue["number"],
+                        "repo_full_name": repo["full_name"],
+                    },
+                )
+            return {"status": "ignored", "reason": "bot_comment"}
         context = {
             "event": event,
             "delivery_id": delivery_id,
@@ -244,7 +279,55 @@ async def github_webhook(request: Request):
             logger.info(f"Relaying comment from {commenter} on issue #{issue['number']}")
         return {"status": "accepted", "issue_number": issue["number"]}
 
+    if event == "pull_request" and action == "opened":
+        pr = payload["pull_request"]
+        repo = payload["repository"]
+        author = (pr.get("user") or {}).get("login", "")
+        if author != "devin-ai-integration[bot]":
+            return {"status": "ignored", "reason": "pr_not_by_devin"}
+        issue_number = _extract_referenced_issue_number(pr)
+        _spawn(
+            "handle_devin_pr_opened",
+            session_manager.handle_devin_pr_opened(
+                pr_number=pr["number"],
+                pr_url=pr.get("html_url") or pr.get("url") or "",
+                issue_number=issue_number,
+                repo_full_name=repo["full_name"],
+            ),
+            {
+                "event": event,
+                "delivery_id": delivery_id,
+                "pr_number": pr["number"],
+                "repo_full_name": repo["full_name"],
+                "issue_number": issue_number,
+            },
+        )
+        logger.info(f"Devin PR #{pr['number']} opened — flipping session to User Action")
+        return {"status": "accepted", "pr_number": pr["number"]}
+
     return {"status": "ignored", "event": event, "action": action}
+
+
+_ISSUE_REF_IN_BODY_RE = re.compile(r"(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE)
+_ISSUE_REF_IN_BRANCH_RE = re.compile(r"issue-(\d+)")
+
+
+def _extract_referenced_issue_number(pr: dict) -> int | None:
+    """Best-effort extraction of the issue number this PR resolves.
+
+    Tries the PR body for ``Fixes #N`` / ``Closes #N`` / ``Resolves #N`` and
+    falls back to the head branch name (Devin's prompt uses
+    ``fix/issue-<N>-<slug>``).
+    """
+    body = pr.get("body") or ""
+    match = _ISSUE_REF_IN_BODY_RE.search(body)
+    if match:
+        return int(match.group(1))
+    branch = ((pr.get("head") or {}).get("ref")) or ""
+    match = _ISSUE_REF_IN_BRANCH_RE.search(branch)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 @app.get("/health")

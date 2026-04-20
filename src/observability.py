@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
 import aiosqlite
 
@@ -10,6 +11,15 @@ DB_PATH = os.getenv("DB_PATH", "/data/sessions.db")
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"finished", "expired"}
+PLACEHOLDER_SESSION_PREFIX = "pending-"
+
+
+def _new_placeholder_id() -> str:
+    return f"{PLACEHOLDER_SESSION_PREFIX}{uuid4()}"
+
+
+def is_placeholder_session_id(session_id: str) -> bool:
+    return bool(session_id) and session_id.startswith(PLACEHOLDER_SESSION_PREFIX)
 
 
 async def init_db() -> None:
@@ -36,6 +46,7 @@ async def init_db() -> None:
             ("pr_merged", "INTEGER DEFAULT 0"),
             ("issue_user", "TEXT"),
             ("issue_closed", "INTEGER DEFAULT 0"),
+            ("error_message", "TEXT"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {definition}")
@@ -63,6 +74,130 @@ async def init_db() -> None:
         """)
         await db.commit()
     logger.info(f"Database initialised at {DB_PATH}")
+
+
+async def record_issue_opened(
+    issue_number: int,
+    issue_title: str,
+    issue_user: str,
+    repo_full_name: str,
+) -> Optional[str]:
+    """Insert a placeholder row for a freshly-opened issue.
+
+    We want the dashboard to show an "Issue Opened" row the moment GitHub
+    delivers the webhook — even if creating the Devin session later fails
+    (e.g. token-limit exhaustion). The placeholder carries a synthetic
+    ``pending-<uuid>`` session_id that `session_manager.handle_issue_opened`
+    rewrites with the real Devin session id on success.
+
+    Returns the placeholder session_id on insert, or None if a row already
+    exists for this (issue_number, repo_full_name) — either a duplicate
+    webhook delivery or an earlier active session still in flight.
+    """
+    placeholder_id = _new_placeholder_id()
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT OR IGNORE INTO sessions
+                (session_id, issue_number, issue_title, issue_user, repo_full_name,
+                 devin_status, last_notified_status, devin_session_url,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'issue-opened', NULL, NULL, ?, ?)
+            """,
+            (placeholder_id, issue_number, issue_title, issue_user,
+             repo_full_name, now, now),
+        )
+        await db.commit()
+        if cursor.rowcount != 1:
+            return None
+    return placeholder_id
+
+
+async def promote_to_working(
+    placeholder_id: str,
+    real_session_id: str,
+    devin_session_url: str,
+) -> bool:
+    """Replace a placeholder's synthetic session_id with the real one and
+    flip it to `working`. Returns False if the placeholder is gone (e.g. the
+    issue was closed & archived before Devin finished starting) or if the
+    swap would collide with an existing row.
+    """
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cursor = await db.execute(
+                """
+                UPDATE sessions
+                SET session_id = ?, devin_status = 'working',
+                    devin_session_url = ?, error_message = NULL,
+                    updated_at = ?
+                WHERE session_id = ?
+                """,
+                (real_session_id, devin_session_url, now, placeholder_id),
+            )
+            await db.commit()
+        except Exception as exc:
+            logger.warning(
+                "promote_to_working(%s -> %s) failed: %s",
+                placeholder_id, real_session_id, exc,
+            )
+            return False
+        return cursor.rowcount == 1
+
+
+async def mark_devin_stopped(
+    placeholder_id: str,
+    error: str,
+) -> None:
+    """Flip a session to `devin-stopped` so the dashboard surfaces that Devin
+    could not work on the issue (typically a token-limit or API error).
+    Works on both placeholder and real session rows.
+    """
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE sessions
+            SET devin_status = 'devin-stopped',
+                error_message = ?,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (error[:500], now, placeholder_id),
+        )
+        await db.commit()
+
+
+async def mark_user_action_from_github(
+    session_id: str,
+    reason: str,
+    pr_url: Optional[str] = None,
+) -> None:
+    """Force a session to `blocked` (User Action) from a GitHub signal —
+    Devin bot commenting on an issue, Devin bot opening a PR, etc. — so the
+    dashboard does not depend solely on Devin-API polling to surface the
+    "waiting on user" state.
+
+    No-ops if the session is already terminal or already blocked, so repeated
+    GitHub echoes don't overwrite the recorded reason.
+    """
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE sessions
+            SET devin_status = 'blocked',
+                pr_url = COALESCE(?, pr_url),
+                error_message = ?,
+                updated_at = ?
+            WHERE session_id = ?
+              AND devin_status NOT IN ('finished', 'expired', 'blocked')
+            """,
+            (pr_url, reason, now, session_id),
+        )
+        await db.commit()
 
 
 async def record_session(

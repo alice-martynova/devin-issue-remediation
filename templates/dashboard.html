@@ -39,6 +39,7 @@
     .card.blue   .value { color: #60a5fa; }
     .card.yellow .value { color: #fbbf24; }
     .card.red    .value { color: #f87171; }
+    .card.gray   .value { color: #94a3b8; }
 
     /* ── Tabs ─────────────────────────────────────────── */
     .tab-bar {
@@ -139,11 +140,24 @@
       font-weight: 600;
     }
     /* User-facing status badges */
+    .badge-issue-opened  { background: #1f2937; color: #94a3b8; }
     .badge-devin-working { background: #1d3a5c; color: #60a5fa; }
     .badge-devin-action  { background: #2d1a45; color: #c084fc; }
     .badge-user-action   { background: #451a03; color: #fbbf24; }
+    .badge-devin-stopped { background: #4a1a1a; color: #f87171; }
     /* Archive */
     .badge-merged        { background: #1a2e4a; color: #818cf8; }
+
+    .error-detail {
+      display: block;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      margin-top: 0.2rem;
+      max-width: 32ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .age-stale { color: #fbbf24; font-weight: 600; }
     .age-ok    { color: #64748b; }
@@ -162,13 +176,20 @@
   {% set archived = sessions | selectattr('pr_merged') | list + (sessions | rejectattr('pr_merged') | selectattr('issue_closed') | list) %}
   {% set current  = sessions | rejectattr('pr_merged') | rejectattr('issue_closed') | list %}
 
-  {# Derive counts using the same display-status logic as the table rows #}
-  {# 'new' sessions haven't been polled yet but are effectively Devin-working #}
+  {# Derive counts using the same display-status logic as the table rows. #}
+  {# 'new' sessions haven't been polled yet but are effectively Devin-working. #}
+  {% set cnt_issue_opened  = current | selectattr('devin_status', 'equalto', 'issue-opened') | list | length %}
   {% set cnt_devin_working = current | selectattr('devin_status', 'in', ['new', 'working']) | list | length %}
-  {% set cnt_user_action   = current | length - cnt_devin_working %}
+  {% set cnt_devin_stopped = current | selectattr('devin_status', 'equalto', 'devin-stopped') | list | length %}
+  {% set cnt_user_action   = current | length - cnt_issue_opened - cnt_devin_working - cnt_devin_stopped %}
 
   {# ── Metric cards ──────────────────────────────────────── #}
   <div class="metrics">
+    <div class="card gray">
+      <div class="label">Issue Opened</div>
+      <div class="value">{{ cnt_issue_opened }}</div>
+      <div class="sub">no Devin session yet</div>
+    </div>
     <div class="card blue">
       <div class="label">Devin Working</div>
       <div class="value">{{ cnt_devin_working }}</div>
@@ -178,6 +199,11 @@
       <div class="label">User Action</div>
       <div class="value">{{ cnt_user_action }}</div>
       <div class="sub">comment on issue or review PR</div>
+    </div>
+    <div class="card red">
+      <div class="label">Devin Stopped</div>
+      <div class="value">{{ cnt_devin_stopped }}</div>
+      <div class="sub">token / system issue</div>
     </div>
   </div>
 
@@ -193,8 +219,10 @@
       <input  id="cur-text"   type="text"   placeholder="Search issue # or title…" oninput="filterTable('current')">
       <select id="cur-status" onchange="filterTable('current')">
         <option value="">All statuses</option>
+        <option value="issue-opened">Issue Opened</option>
         <option value="devin-working">Devin Working</option>
         <option value="user-action">User Action</option>
+        <option value="devin-stopped">Devin Stopped</option>
       </select>
       <span id="cur-count" class="filter-count"></span>
     </div>
@@ -220,7 +248,13 @@
         {# Compute the user-facing status and its display label. Sessions in
            the initial 'new' state (webhook received, Devin not yet polled)
            are rendered as 'Devin Working' since no distinct action is needed. #}
-        {% if s.devin_status in ('new', 'working') %}
+        {% if s.devin_status == 'issue-opened' %}
+          {% set display_status = 'issue-opened' %}
+          {% set status_label   = 'Issue Opened' %}
+        {% elif s.devin_status == 'devin-stopped' %}
+          {% set display_status = 'devin-stopped' %}
+          {% set status_label   = 'Devin Stopped' %}
+        {% elif s.devin_status in ('new', 'working') %}
           {% set display_status = 'devin-working' %}
           {% set status_label   = 'Devin Working' %}
         {% else %}
@@ -237,6 +271,9 @@
           <td>{{ s.issue_title }}</td>
           <td>
             <span class="badge badge-{{ display_status }}">{{ status_label }}</span>
+            {% if display_status == 'devin-stopped' and s.error_message %}
+              <span class="error-detail" title="{{ s.error_message }}">{{ s.error_message }}</span>
+            {% endif %}
           </td>
           <td>
             {% if s.pr_url %}

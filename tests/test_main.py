@@ -10,13 +10,16 @@ from src import observability
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     # Prevent the lifespan from hitting the real GitHub API / starting the poller.
     from src import main as main_module
 
     monkeypatch.setattr(main_module, "_background_poller", AsyncMock())
     monkeypatch.setattr(main_module, "_print_ngrok_url", AsyncMock())
-    monkeypatch.setattr(main_module.observability, "init_db", AsyncMock())
+    # Route DB writes to an ephemeral path — the `issues.opened` webhook now
+    # inserts an `issue-opened` placeholder synchronously before returning
+    # 202, so the tests need a real (but disposable) sqlite file.
+    monkeypatch.setattr(observability, "DB_PATH", str(tmp_path / "sessions.db"))
 
     with TestClient(main_module.app) as c:
         yield c
