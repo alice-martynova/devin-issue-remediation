@@ -73,6 +73,57 @@ async def test_partial_unique_index_blocks_duplicate_active_session(db):
     assert {s["session_id"] for s in all_sessions} == {"sess-A"}
 
 
+async def test_devin_stopped_does_not_block_future_placeholder(db):
+    """A `devin-stopped` row must not block a subsequent record_issue_opened
+    for the same issue — otherwise a token-limit failure would permanently
+    prevent retries on close+reopen.
+    """
+    ph1 = await observability.record_issue_opened(
+        issue_number=42,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+    )
+    assert ph1 is not None
+    await observability.mark_devin_stopped(ph1, "token limit")
+
+    ph2 = await observability.record_issue_opened(
+        issue_number=42,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+    )
+    assert ph2 is not None
+    assert ph2 != ph1
+
+
+async def test_issue_closed_row_does_not_block_future_placeholder(db):
+    """Closing an issue (issue_closed=1) should release the partial unique
+    index so a subsequent reopen can create a fresh placeholder even if the
+    prior session was still `working` / `blocked` when it closed.
+    """
+    await observability.record_session(
+        session_id="sess-old",
+        issue_number=55,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+        devin_session_url="https://example",
+    )
+    # Simulate a `blocked` session that the user then closed without waiting
+    # for Devin to finish.
+    await observability.update_session("sess-old", "blocked")
+    await observability.update_issue_closed("sess-old")
+
+    ph = await observability.record_issue_opened(
+        issue_number=55,
+        issue_title="t",
+        issue_user="u",
+        repo_full_name="r/r",
+    )
+    assert ph is not None
+
+
 async def test_new_session_allowed_after_previous_one_terminated(db):
     """Once a session reaches a terminal status, a new active session for
     the same issue should be creatable (e.g. issue reopened)."""

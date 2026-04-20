@@ -53,13 +53,26 @@ async def init_db() -> None:
             except Exception:
                 pass  # column already exists
 
-        # Prevent duplicate active sessions for the same issue. Allow new
-        # sessions to be created once a prior one terminates (e.g. issue
-        # reopened after a PR was closed without merging).
+        # Prevent duplicate active sessions for the same issue while still
+        # allowing retries once a prior row is effectively "done":
+        #   - finished / expired: natural Devin terminal states
+        #   - devin-stopped:      Devin could not work (token / 5xx / network)
+        #   - issue_closed=1:     GitHub issue closed (covers the close → reopen
+        #                         retry path even if the row's devin_status is
+        #                         still 'working' or 'blocked')
+        # The `issue-opened` placeholder is intentionally still covered by the
+        # index so two concurrent webhook deliveries for the same issue can't
+        # both spawn a Devin session.
+        #
+        # The index predicate changed from the original version, so drop any
+        # older copy first — CREATE INDEX IF NOT EXISTS would silently keep
+        # the stale predicate on existing deployments.
+        await db.execute("DROP INDEX IF EXISTS idx_active_session_per_issue")
         await db.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_session_per_issue
+            CREATE UNIQUE INDEX idx_active_session_per_issue
             ON sessions (issue_number, repo_full_name)
-            WHERE devin_status NOT IN ('finished', 'expired')
+            WHERE devin_status NOT IN ('finished', 'expired', 'devin-stopped')
+              AND issue_closed = 0
         """)
 
         # Dead-letter log for webhook handlers that threw before completing.
