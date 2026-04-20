@@ -157,7 +157,7 @@ async def github_webhook(request: Request):
 
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
 
-    if event == "issues" and action == "opened":
+    if event == "issues" and action in ("opened", "reopened"):
         issue = payload["issue"]
         repo = payload["repository"]
         _spawn(

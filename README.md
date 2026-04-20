@@ -5,7 +5,7 @@ Event-driven automation that triggers Devin to resolve GitHub issues as soon as 
 ## How it works
 
 ```
-Issue opened
+Issue opened or reopened
       ↓
 GitHub webhook → POST /webhook/github
       ↓
@@ -143,7 +143,9 @@ Common commands:
 |---------|--------------|
 | `./run start` | Build + start + stream verbose logs |
 | `./run --quiet start` | Same, but concise build output and `INFO` logs |
-| `./run logs` | Re-attach to logs of an already-running stack |
+| `./run logs` | Re-attach to combined logs of an already-running stack |
+| `./run logs app` | App/webhook logs only (session events, Devin API calls) |
+| `./run logs ngrok` | Tunnel logs only (incoming HTTP requests) |
 | `./run status` | Show container status and resource usage |
 | `./run restart` | Restart without rebuilding |
 | `./run rebuild` | Force a clean `--no-cache` rebuild |
