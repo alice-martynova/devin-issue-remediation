@@ -37,7 +37,7 @@ def _require_env(name: str) -> str:
 DEVIN_API_KEY = _require_env("DEVIN_API_KEY")
 GITHUB_TOKEN = _require_env("GITHUB_TOKEN")
 GITHUB_WEBHOOK_SECRET = _require_env("GITHUB_WEBHOOK_SECRET")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "20"))
 POLL_TIMEOUT = int(os.getenv("POLL_TIMEOUT_SECONDS", "120"))
 # URL of ngrok's local API; empty string disables auto-detection
 NGROK_API_URL = os.getenv("NGROK_API_URL", "http://ngrok:4040").strip()

@@ -157,7 +157,7 @@
 </head>
 <body>
   <h1>Devin Remediation Dashboard</h1>
-  <p class="subtitle">Devin issue remediation · auto-refreshes every 30s</p>
+  <p class="subtitle">Devin issue remediation · auto-refreshes every 15s</p>
 
   {% set archived = sessions | selectattr('pr_merged') | list + (sessions | rejectattr('pr_merged') | selectattr('issue_closed') | list) %}
   {% set current  = sessions | rejectattr('pr_merged') | rejectattr('issue_closed') | list %}
@@ -328,7 +328,7 @@
     {% endif %}
   </div>
 
-  <p class="refresh-note">Page auto-refreshes every 30 seconds</p>
+  <p class="refresh-note">Page auto-refreshes every 15 seconds</p>
 
   <script>
     function switchTab(name, btn) {
@@ -345,7 +345,7 @@
         var btns = document.querySelectorAll('.tab-btn');
         switchTab('archive', btns[1]);
       }
-      setTimeout(function() { location.reload(); }, 30000);
+      setTimeout(function() { location.reload(); }, 15000);
     })();
 
     function filterTable(tab) {
