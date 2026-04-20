@@ -159,9 +159,18 @@ cmd_status() {
   compose ps
   section "Resource usage"
   # --no-stream prints a single snapshot instead of a live TUI so the
-  # output is scriptable and always returns to the prompt.
-  docker stats --no-stream \
-    "$(compose ps -q 2>/dev/null | tr '\n' ' ')" 2>/dev/null || true
+  # output is scriptable and always returns to the prompt. The unquoted
+  # command substitution is intentional: docker stats expects each
+  # container id as a separate positional argument, so we rely on
+  # bash word-splitting the newline-separated ids from `compose ps -q`.
+  local ids
+  ids=$(compose ps -q 2>/dev/null || true)
+  if [[ -n "$ids" ]]; then
+    # shellcheck disable=SC2086
+    docker stats --no-stream $ids || true
+  else
+    info "No containers running."
+  fi
 }
 
 cmd_shell() {
