@@ -17,8 +17,9 @@ from .devin_client import DevinClient
 from .github_client import GitHubClient
 from .session_manager import SessionManager
 
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, _log_level_name, logging.INFO),
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 logger = logging.getLogger(__name__)

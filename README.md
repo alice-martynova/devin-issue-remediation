@@ -129,11 +129,30 @@ Open `.env` and fill in each variable:
 **2. Start everything:**
 
 ```bash
-docker-compose up --build
+./run start
 ```
 
-> To run in the background: `docker-compose up --build -d`
-> View logs at any time with: `docker-compose logs -f`
+`./run` is a thin wrapper that abstracts Docker away. It builds the images with
+plain (line-by-line) build output, starts the containers, and tails their
+combined logs with timestamps and `DEBUG`-level app logging so you can see
+exactly what the app is doing in the terminal — not just on the dashboard.
+
+Common commands:
+
+| Command | What it does |
+|---------|--------------|
+| `./run start` | Build + start + stream verbose logs |
+| `./run --quiet start` | Same, but concise build output and `INFO` logs |
+| `./run logs` | Re-attach to logs of an already-running stack |
+| `./run status` | Show container status and resource usage |
+| `./run restart` | Restart without rebuilding |
+| `./run rebuild` | Force a clean `--no-cache` rebuild |
+| `./run stop` | Stop and remove containers (volumes preserved) |
+| `./run shell` | Open an interactive shell inside the app container |
+| `./run help` | Full reference |
+
+> Press `Ctrl+C` while `./run start` is streaming logs to detach — the
+> containers keep running. Use `./run stop` to actually stop them.
 
 **3. Register the webhook on GitHub:**
 
