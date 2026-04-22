@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 _CONTEXT_FILE = os.getenv("DEVIN_CONTEXT_FILE", "/config/context.txt")
 _CONTEXT_ENV  = os.getenv("DEVIN_CONTEXT", "").strip()
 
+# Sessions in pending state older than this are auto-transitioned to error.
+PENDING_TIMEOUT_MINUTES = int(os.getenv("PENDING_TIMEOUT_MINUTES", "15"))
+
 
 def _load_context() -> str:
     """Return project context to prepend to every Devin prompt.
@@ -33,7 +36,7 @@ def _load_context() -> str:
 
 _PROJECT_CONTEXT = _load_context()
 
-TERMINAL_STATUSES = {"finished", "expired"}
+TERMINAL_STATUSES = {"finished", "expired", "error"}
 
 # Map Devin API status values to our internal vocabulary.
 #
@@ -44,7 +47,7 @@ TERMINAL_STATUSES = {"finished", "expired"}
 #   - `status_enum`: the authoritative lifecycle state, including `blocked`
 #     when Devin is waiting for a human reply on an issue or PR.
 #
-# We prefer `status_enum` so `blocked` surfaces as "User Action" on
+# We prefer `status_enum` so `blocked` surfaces as "User Input" on
 # the dashboard instead of being collapsed into "Devin Working".
 _STATUS_MAP: dict[str, str] = {
     # Legacy free-form `status` field values
@@ -59,9 +62,19 @@ _STATUS_MAP: dict[str, str] = {
     "resumed":                    "working",
 }
 
+# Status values that are valid internal states and should pass through as-is
+# when not present in _STATUS_MAP.
+_KNOWN_STATUSES = {"working", "blocked", "finished", "expired", "pending", "error"}
+
 
 def _normalize_status(raw: str) -> str:
-    return _STATUS_MAP.get(raw, raw)
+    mapped = _STATUS_MAP.get(raw)
+    if mapped:
+        return mapped
+    if raw in _KNOWN_STATUSES:
+        return raw
+    logger.warning("Unknown Devin status_enum %r — treating as error", raw)
+    return "error"
 
 
 def _extract_status(details: dict) -> str:
@@ -72,6 +85,9 @@ def _extract_status(details: dict) -> str:
     `status` only when `status_enum` is missing.
     """
     return details.get("status_enum") or details.get("status") or "working"
+
+
+_PR_URL_RE = re.compile(r"https://github\.com/[^/]+/[^/]+/pull/\d+")
 
 
 def _extract_pr_url(details: dict) -> Optional[str]:
@@ -90,6 +106,13 @@ def _extract_pr_url(details: dict) -> Optional[str]:
         )
         if url:
             return url
+    # Fallback: scan free-text output for a GitHub PR URL. Devin sometimes
+    # reports the PR only in its session summary text rather than structured fields.
+    output = details.get("output") or details.get("summary") or ""
+    if isinstance(output, str):
+        match = _PR_URL_RE.search(output)
+        if match:
+            return match.group(0)
     return None
 
 
@@ -176,54 +199,57 @@ class SessionManager:
         owner, repo = repo_full_name.split("/", 1)
 
         if await observability.session_exists_for_issue(issue_number, repo_full_name):
-            logger.info(f"Session already exists for #{issue_number}, skipping")
+            logger.info("Duplicate webhook for #%d — session already exists, skipping", issue_number)
+            return None
+
+        idempotency_key = f"issue-{issue_number}-{repo_full_name}"
+        placeholder_id = f"pending:{idempotency_key}"
+
+        # Write the issue to the DB immediately so it appears on the dashboard
+        # even if the Devin API call fails (e.g. out of tokens).
+        inserted = await observability.record_pending_session(
+            placeholder_id=placeholder_id,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_user=issue_user,
+            repo_full_name=repo_full_name,
+        )
+        if not inserted:
+            logger.info("Duplicate webhook for #%d — lost race, skipping", issue_number)
             return None
 
         prompt = build_devin_prompt(
             issue_number, issue_title, issue_body, repo_full_name, default_branch
         )
-        idempotency_key = f"issue-{issue_number}-{repo_full_name}"
 
-        logger.info(f"Creating Devin session for issue #{issue_number}: {issue_title}")
-        result = await self.devin.create_session(
-            prompt=prompt,
-            title=f"Fix: {issue_title[:80]}",
-            tags=[f"issue-{issue_number}"],
-            idempotency_key=idempotency_key,
-        )
+        logger.info("Creating Devin session for #%d: %s", issue_number, issue_title)
+        try:
+            result = await self.devin.create_session(
+                prompt=prompt,
+                title=f"Fix: {issue_title[:80]}",
+                tags=[f"issue-{issue_number}"],
+                idempotency_key=idempotency_key,
+            )
+        except Exception as exc:
+            error_msg = str(exc)
+            await observability.set_session_error(placeholder_id, error_msg)
+            logger.error(
+                "Devin session FAILED  #%d \"%s\"  —  %s",
+                issue_number, issue_title, error_msg,
+            )
+            return None
 
         session_id = result["session_id"]
         devin_url = result["url"]
 
-        # record_session returns False if another concurrent webhook delivery
-        # already claimed this issue (via the partial unique index on
-        # (issue_number, repo_full_name)). When that happens Devin has
-        # returned the same session_id thanks to our idempotency_key, so we
-        # just skip the first-touch GitHub comment to avoid posting twice.
-        inserted = await observability.record_session(
-            session_id=session_id,
-            issue_number=issue_number,
-            issue_title=issue_title,
-            issue_user=issue_user,
-            repo_full_name=repo_full_name,
-            devin_session_url=devin_url,
+        await observability.activate_pending_session(placeholder_id, session_id, devin_url)
+        logger.info(
+            "Devin session started  #%d \"%s\"  →  %s",
+            issue_number, issue_title, devin_url,
         )
-
-        if not inserted:
-            logger.info(
-                "Duplicate webhook delivery for issue #%d — skipping",
-                issue_number,
-            )
-            return session_id
-
-        # Devin itself posts the first-touch "working on this" comment from
-        # inside the session (see the prompt), so the orchestrator does not
-        # post from its own GitHub identity here.
-
-        logger.info(f"Session {session_id} started for issue #{issue_number}")
         return session_id
 
-    async def _check_pr_merged(self, session: dict) -> None:
+    async def _sync_pr_merge_status(self, session: dict) -> None:
         pr_url = session.get("pr_url")
         if not pr_url or session.get("pr_merged"):
             return
@@ -235,17 +261,49 @@ class SessionManager:
             merged = await self.github.is_pr_merged(owner, repo, pr_number)
             if merged:
                 await observability.update_pr_merged(session["session_id"])
-                logger.info(f"PR #{pr_number} merged for issue #{session['issue_number']}")
+                logger.info(
+                    "PR #%d merged  →  #%d \"%s\" resolved",
+                    pr_number, session["issue_number"], session.get("issue_title", ""),
+                )
         except Exception as e:
-            logger.error(f"Error checking PR merge for session {session['session_id']}: {e}")
+            logger.error("Error checking PR merge for session %s: %s", session["session_id"], e)
+
+    async def _check_devin_commented(self, session: dict) -> None:
+        """Check GitHub to see if Devin has posted its first-touch comment.
+
+        Runs on every poll cycle until devin_commented flips to 1, then
+        never runs again for that session.
+        """
+        if session.get("devin_commented"):
+            return
+        owner, repo = session["repo_full_name"].split("/", 1)
+        try:
+            if await self.github.has_devin_comment(owner, repo, session["issue_number"]):
+                await observability.update_devin_commented(session["session_id"])
+                logger.info(
+                    "Devin confirmed active  #%d \"%s\"  (first GitHub comment seen)",
+                    session["issue_number"], session.get("issue_title", ""),
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not check Devin comment for #%d: %s", session["issue_number"], e
+            )
 
     async def _poll_one(self, session: dict) -> None:
         session_id = session["session_id"]
 
-        await self._check_pr_merged(session)
+        await self._sync_pr_merge_status(session)
 
-        if session.get("devin_status") in TERMINAL_STATUSES:
+        # error is permanently done — skip Devin API call.
+        # expired is NOT skipped: Devin can resume after a quota increase.
+        # finished WITH a PR URL is done. finished WITHOUT a PR URL keeps polling
+        # so the text-fallback extraction gets another chance to find it.
+        if session.get("devin_status") == "error":
             return
+        if session.get("devin_status") == "finished" and session.get("pr_url"):
+            return
+
+        await self._check_devin_commented(session)
 
         try:
             details = await self.devin.get_session(session_id)
@@ -263,25 +321,25 @@ class SessionManager:
             if new_status == last_notified:
                 return
 
-            # All user-facing comments on the issue are posted by Devin
-            # itself from inside the session (first-touch, PR-ready, blocked
-            # questions) so they render as `devin-ai-integration[bot]` and
-            # stay distinguishable from human replies. The orchestrator only
-            # records that it has observed each state so the dashboard can
-            # surface it and we don't re-log it every poll cycle.
+            issue_label = f"#{session['issue_number']} \"{session.get('issue_title', '')}\""
             if new_status == "finished":
-                logger.info(f"Session {session_id} finished — PR: {pr_url}")
+                pr_display = pr_url or "no PR URL captured"
+                logger.info("Devin finished   %s  →  %s", issue_label, pr_display)
             elif new_status == "blocked":
-                logger.warning(f"Session {session_id} is blocked — Devin will comment directly")
+                logger.warning(
+                    "Devin BLOCKED    %s  —  waiting for human reply on issue", issue_label
+                )
             elif new_status == "expired":
-                logger.error(f"Session {session_id} expired")
+                logger.error("Devin EXPIRED    %s  —  session timed out, no PR opened", issue_label)
+            elif new_status == "error":
+                logger.error("Devin ERROR      %s  —  unexpected status: %r", issue_label, raw_status)
             else:
                 return
 
             await observability.update_notified_status(session_id, new_status)
 
         except Exception as e:
-            logger.error(f"Error polling session {session_id}: {e}")
+            logger.error("Error polling session %s: %s", session_id, e)
 
     async def handle_issue_comment(
         self,
@@ -301,7 +359,7 @@ class SessionManager:
             body=comment_body,
         )
         await self.devin.send_message(session_id, message)
-        logger.info(f"Relayed comment from {comment_user} to Devin session {session_id}")
+        logger.info("Relayed comment from @%s on #%d to Devin", comment_user, issue_number)
 
     async def handle_pr_comment(
         self,
@@ -320,7 +378,7 @@ class SessionManager:
             body=comment_body,
         )
         await self.devin.send_message(session_id, message)
-        logger.info(f"Relayed PR comment from {comment_user} to Devin session {session_id}")
+        logger.info("Relayed PR comment from @%s on PR #%d to Devin", comment_user, pr_number)
 
     async def handle_issue_closed(
         self,
@@ -329,7 +387,6 @@ class SessionManager:
     ) -> None:
         session = await observability.get_active_session_by_issue(issue_number, repo_full_name)
         if not session:
-            # Also check terminal sessions so a closed finished/expired session is archived
             async def _find_any():
                 all_sessions = await observability.get_all_sessions()
                 for s in all_sessions:
@@ -340,11 +397,26 @@ class SessionManager:
         if not session:
             return
         await observability.update_issue_closed(session["session_id"])
-        logger.info(f"Issue #{issue_number} closed — session {session['session_id']} moved to archive")
+        logger.info("Issue #%d closed — session %s moved to archive", issue_number, session["session_id"])
 
     async def poll_and_update(self) -> None:
+        # Three phases each tick:
+        # 1. Expire stale pending rows — catches crashes between pre-write and Devin API call.
+        # 2. Poll active sessions — fetch latest status and PR URL from Devin.
+        # 3. Check PR merge status — handled inside _poll_one for sessions with an open PR.
+        stale = await observability.get_stale_pending_sessions(PENDING_TIMEOUT_MINUTES)
+        for s in stale:
+            await observability.set_session_error(
+                s["session_id"],
+                f"Session creation timed out after {PENDING_TIMEOUT_MINUTES} minutes",
+            )
+            logger.error(
+                "Devin NOT STARTED  #%d \"%s\"  —  pending for >%dm, marking as error",
+                s["issue_number"], s.get("issue_title", ""), PENDING_TIMEOUT_MINUTES,
+            )
+
         active = await observability.get_active_sessions()
         if not active:
             return
-        logger.info(f"Polling {len(active)} active session(s)")
+        logger.debug("Polling %d active session(s)", len(active))
         await asyncio.gather(*[self._poll_one(s) for s in active], return_exceptions=True)

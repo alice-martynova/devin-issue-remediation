@@ -97,33 +97,12 @@ build_env() {
 cmd_build() {
   section "Building images"
   build_env
-  local build_args=()
-  [[ $QUIET -eq 0 ]] && build_args+=(--progress=plain)
-  compose build "${build_args[@]}" "$@"
+  if [[ $QUIET -eq 0 ]]; then
+    compose build --progress=plain "$@"
+  else
+    compose build "$@"
+  fi
   ok "Build complete."
-}
-
-cmd_start() {
-  section "Starting devin-issue-remediation"
-  build_env
-  info "Log level: ${LOG_LEVEL} (use --quiet for info-level logs)"
-
-  local build_args=()
-  [[ $QUIET -eq 0 ]] && build_args+=(--progress=plain)
-  section "Building images"
-  compose build "${build_args[@]}"
-
-  section "Launching containers"
-  compose up -d
-
-  section "Container status"
-  compose ps
-
-  section "Streaming logs (Ctrl+C to detach — containers keep running)"
-  info "Use './run stop' to stop them, './run logs' to re-attach."
-  # --no-log-prefix keeps the output readable; our own prefixing would
-  # clash with the app's timestamped log format.
-  compose logs -f --tail=200 --timestamps
 }
 
 cmd_stop() {
@@ -148,9 +127,36 @@ cmd_rebuild() {
 }
 
 cmd_logs() {
-  section "Following logs"
-  detect_compose
-  compose logs -f --tail=200 --timestamps "$@"
+  local view="${1:-app}"
+  section "Logs — ${view}"
+  case "$view" in
+    app)
+      # Clean Devin status events only — session started, blocked, finished,
+      # errors, PR merged. Same output as the old ./run --quiet start.
+      compose logs -f --tail=200 --timestamps app \
+        | grep --line-buffered -E \
+            "(ERROR|WARNING|Devin|Issue|issue|session|Session|PR|Relay|WEBHOOK|Accepted|failed)"
+      ;;
+    all)
+      # Every log line from every container — useful when debugging webhook
+      # delivery or ngrok connectivity.
+      compose logs -f --tail=200 --timestamps
+      ;;
+    raw)
+      # Unfiltered app container logs — includes DEBUG lines if the container
+      # was started with LOG_LEVEL=debug.
+      compose logs -f --tail=200 --timestamps app
+      ;;
+    ngrok)
+      # Tunnel logs only — shows incoming HTTP requests from GitHub.
+      compose logs -f --tail=200 --timestamps ngrok
+      ;;
+    *)
+      err "Unknown log view: ${view}"
+      info "Available views: app (default), all, raw, ngrok"
+      exit 64
+      ;;
+  esac
 }
 
 cmd_status() {
@@ -190,37 +196,38 @@ docker or docker compose directly.
 ${C_BOLD}Usage:${C_RESET}
   ./run [--quiet] <command> [args...]
 
-${C_BOLD}Commands:${C_RESET}
-  start      Build images and start containers, then stream logs in the
-             terminal. Verbose build + DEBUG-level app logs by default.
-  stop       Stop and remove containers (volumes preserved).
-  restart    Restart running containers without rebuilding.
-  rebuild    Force a clean rebuild with no cache.
-  build      Build images only (do not start containers).
-  logs       Tail logs from the running stack (timestamped).
-             Pass a service name to filter: app, ngrok.
-  status     Show container and resource status.
-  shell      Open an interactive shell inside the app container.
-  help       Show this help text.
+${C_BOLD}Starting the stack:${C_RESET}
+  docker compose up --build        # build + start (foreground, Ctrl+C stops)
+  docker compose up --build -d     # same but detached (use ./run logs to follow)
 
-${C_BOLD}Flags:${C_RESET}
-  --quiet / -q   Suppress verbose build output and use INFO-level app logs.
-  --verbose / -v Force verbose mode (default).
+${C_BOLD}Commands:${C_RESET}
+  logs [view]  Tail logs from the running stack. Views:
+                 app    (default) Devin status events — session started/blocked/
+                        finished/error, PRs merged. Clean signal, low noise.
+                 all    Every log line from every container.
+                 raw    Unfiltered app container logs (includes DEBUG if enabled).
+                 ngrok  Tunnel logs — incoming webhook requests from GitHub.
+  stop         Stop and remove containers (volumes preserved).
+  restart      Restart running containers without rebuilding.
+  rebuild      Force a clean no-cache rebuild.
+  build        Build images only (do not start containers).
+  status       Show container and resource usage.
+  shell        Open an interactive shell inside the app container.
+  help         Show this help text.
 
 ${C_BOLD}Examples:${C_RESET}
-  ./run start          # full build + start + streaming logs
-  ./run --quiet start  # same, but with concise output
-  ./run logs           # reattach to a stack started earlier
-  ./run logs app       # app/webhook logs only
-  ./run logs ngrok     # ngrok tunnel logs only
-  ./run rebuild        # no-cache rebuild (run before ./run start)
-  ./run shell          # drop into a shell inside the app container
+  docker compose up --build        # start the stack
+  ./run logs                       # Devin status events (clean view)
+  ./run logs all                   # everything, all containers
+  ./run logs raw                   # unfiltered app logs
+  ./run logs ngrok                 # incoming webhook requests
+  ./run rebuild                    # no-cache rebuild
+  ./run shell                      # shell inside app container
 EOF
 }
 
 # -------- dispatch --------------------------------------------------------
 case "$CMD" in
-  start|up)     detect_compose; check_daemon; check_env_file; cmd_start "$@" ;;
   stop|down)    detect_compose; check_daemon; cmd_stop "$@" ;;
   restart)      detect_compose; check_daemon; cmd_restart "$@" ;;
   rebuild)      detect_compose; check_daemon; check_env_file; cmd_rebuild "$@" ;;

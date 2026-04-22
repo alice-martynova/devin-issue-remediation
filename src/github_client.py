@@ -55,6 +55,27 @@ class GitHubClient:
 
         return await with_retry(_call)
 
+    async def has_devin_comment(self, owner: str, repo: str, issue_number: int) -> bool:
+        """Return True if devin-ai-integration[bot] has posted on this issue."""
+        page = 1
+        while True:
+            async def _call(_page=page):
+                response = await self._client.get(
+                    f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
+                    params={"per_page": 100, "page": _page},
+                )
+                response.raise_for_status()
+                return response.json()
+
+            comments = await with_retry(_call)
+            if not comments:
+                return False
+            if any(c["user"]["login"] == "devin-ai-integration[bot]" for c in comments):
+                return True
+            if len(comments) < 100:
+                return False
+            page += 1
+
     async def add_labels(
         self, owner: str, repo: str, issue_number: int, labels: list[str]
     ) -> None:

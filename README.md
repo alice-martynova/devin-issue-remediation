@@ -1,21 +1,41 @@
 # Devin Issue Remediation
 
-Event-driven automation that triggers Devin to resolve GitHub issues as soon as they are opened.
+Open a GitHub issue — Devin reads it, writes the fix, and opens a pull request. No manual handoff required.
+
+## Quickstart
+
+1. **Install Docker Desktop** — [docs.docker.com/get-docker](https://docs.docker.com/get-docker/). Open it and wait for it to finish starting before continuing.
+2. **Get your credentials** — you need four: a Devin API key, a GitHub token, a webhook secret, and an ngrok token. See [Prerequisites](#prerequisites) for exactly where to find each one.
+3. **Configure the app:**
+   ```bash
+   cp .env.example .env
+   # Open .env and fill in the four values
+   ```
+4. **Start the system:**
+   ```bash
+   ./run start
+   ```
+5. **Connect GitHub** — copy the webhook URL printed in the logs (e.g. `https://abc123.ngrok.io/webhook/github`) and [register it on your repo](#3-register-the-webhook-on-github) with event types **Issues** and **Issue comments**.
+6. **Open an issue** — Devin starts working immediately. Track progress at [localhost:8000/dashboard](http://localhost:8000/dashboard).
+
+---
 
 ## How it works
 
 ```
-Issue opened or reopened
-      ↓
-GitHub webhook → POST /webhook/github
-      ↓
-FastAPI extracts issue title and body
-      ↓
-Devin API session created with the issue details as its prompt
-      ↓
-Background poller checks session status every 60s
-      ↓
-Devin opens PR → comments on issue with PR link
+A new issue is opened on GitHub
+         ↓
+GitHub sends a real-time notification to this system
+         ↓
+The system reads the issue title and description
+         ↓
+Devin receives the details and begins investigating and writing a fix
+         ↓
+Progress is checked automatically every 20 seconds
+         ↓
+Devin opens a pull request and posts the link as a comment on the issue
+         ↓
+Any replies you leave on the issue are forwarded to Devin automatically
 ```
 
 ## Prerequisites
@@ -211,6 +231,8 @@ Restart the containers after saving — context is loaded once at startup.
 
 **5. Open an issue — Devin starts immediately.**
 
+Go to your repository on GitHub, open any issue with a clear description of what to fix, and watch the [dashboard](http://localhost:8000/dashboard) — a new session will appear within seconds.
+
 ### Writing effective issues
 
 The issue body is passed directly to Devin as its instructions. The more specific you are, the better the result. Always include:
@@ -227,7 +249,7 @@ A vague body forces Devin to guess. A body with file paths, code snippets, and a
 
 | Endpoint | Description |
 |----------|-------------|
-| `http://localhost:8000/dashboard` | Live status dashboard (auto-refreshes every 30s) |
+| `http://localhost:8000/dashboard` | Live status dashboard (auto-refreshes every 15s) |
 | `http://localhost:8000/sessions` | Raw JSON of all sessions |
 | `http://localhost:8000/health` | Health check + aggregate metrics |
 

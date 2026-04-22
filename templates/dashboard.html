@@ -39,6 +39,8 @@
     .card.blue   .value { color: #60a5fa; }
     .card.yellow .value { color: #fbbf24; }
     .card.red    .value { color: #f87171; }
+    .card.green  .value { color: #34d399; }
+    .card.grey   .value { color: #94a3b8; }
 
     /* ── Tabs ─────────────────────────────────────────── */
     .tab-bar {
@@ -139,9 +141,10 @@
       font-weight: 600;
     }
     /* User-facing status badges */
+    .badge-issue-open    { background: #162016; color: #86efac; }
     .badge-devin-working { background: #1d3a5c; color: #60a5fa; }
-    .badge-devin-action  { background: #2d1a45; color: #c084fc; }
-    .badge-user-action   { background: #451a03; color: #fbbf24; }
+    .badge-user-input    { background: #451a03; color: #fbbf24; }
+    .badge-error         { background: #450a0a; color: #f87171; }
     /* Archive */
     .badge-merged        { background: #1a2e4a; color: #818cf8; }
 
@@ -162,22 +165,34 @@
   {% set archived = sessions | selectattr('pr_merged') | list + (sessions | rejectattr('pr_merged') | selectattr('issue_closed') | list) %}
   {% set current  = sessions | rejectattr('pr_merged') | rejectattr('issue_closed') | list %}
 
-  {# Derive counts using the same display-status logic as the table rows #}
-  {# 'new' sessions haven't been polled yet but are effectively Devin-working #}
-  {% set cnt_devin_working = current | selectattr('devin_status', 'in', ['new', 'working']) | list | length %}
-  {% set cnt_user_action   = current | length - cnt_devin_working %}
+  {# Derive per-status counts for the Current tab metric cards #}
+  {% set cnt_issue_open    = current | selectattr('devin_status', 'equalto', 'pending') | list | length
+                           + (current | selectattr('devin_status', 'equalto', 'working') | rejectattr('devin_commented') | list | length) %}
+  {% set cnt_devin_working = current | selectattr('devin_status', 'equalto', 'working') | selectattr('devin_commented') | list | length %}
+  {% set cnt_user_input    = current | selectattr('devin_status', 'in', ['blocked', 'finished']) | list | length %}
+  {% set cnt_error         = current | selectattr('devin_status', 'in', ['error', 'expired']) | list | length %}
 
   {# ── Metric cards ──────────────────────────────────────── #}
   <div class="metrics">
+    <div class="card grey">
+      <div class="label">Issue Open</div>
+      <div class="value">{{ cnt_issue_open }}</div>
+      <div class="sub">waiting for Devin to start</div>
+    </div>
     <div class="card blue">
       <div class="label">Devin Working</div>
       <div class="value">{{ cnt_devin_working }}</div>
-      <div class="sub">actively processing</div>
+      <div class="sub">confirmed active on GitHub</div>
     </div>
     <div class="card yellow">
-      <div class="label">User Action</div>
-      <div class="value">{{ cnt_user_action }}</div>
+      <div class="label">User Input</div>
+      <div class="value">{{ cnt_user_input }}</div>
       <div class="sub">comment on issue or review PR</div>
+    </div>
+    <div class="card red">
+      <div class="label">Error</div>
+      <div class="value">{{ cnt_error }}</div>
+      <div class="sub">session failed or expired</div>
     </div>
   </div>
 
@@ -193,8 +208,10 @@
       <input  id="cur-text"   type="text"   placeholder="Search issue # or title…" oninput="filterTable('current')">
       <select id="cur-status" onchange="filterTable('current')">
         <option value="">All statuses</option>
+        <option value="issue-open">Issue Open</option>
         <option value="devin-working">Devin Working</option>
-        <option value="user-action">User Action</option>
+        <option value="user-input">User Input</option>
+        <option value="error">Error</option>
       </select>
       <span id="cur-count" class="filter-count"></span>
     </div>
@@ -215,17 +232,24 @@
       </thead>
       <tbody>
         {% for s in current %}
-        {% set is_stale = s.devin_status not in ('finished', 'expired') and s.age_minutes > 120 %}
+        {% set is_stale = s.devin_status not in ('finished', 'expired', 'error') and s.age_minutes > 120 %}
 
-        {# Compute the user-facing status and its display label. Sessions in
-           the initial 'new' state (webhook received, Devin not yet polled)
-           are rendered as 'Devin Working' since no distinct action is needed. #}
-        {% if s.devin_status in ('new', 'working') %}
+        {# Derive the 4-state display status from Devin API state + GitHub signals #}
+        {% if s.devin_status in ('error', 'expired') %}
+          {% set display_status = 'error' %}
+          {% set status_label   = 'Error' %}
+        {% elif s.devin_status == 'pending' or (s.devin_status == 'working' and not s.devin_commented) %}
+          {% set display_status = 'issue-open' %}
+          {% set status_label   = 'Issue Open' %}
+        {% elif s.devin_status == 'working' and s.devin_commented %}
           {% set display_status = 'devin-working' %}
           {% set status_label   = 'Devin Working' %}
+        {% elif s.devin_status in ('blocked', 'finished') %}
+          {% set display_status = 'user-input' %}
+          {% set status_label   = 'User Input' %}
         {% else %}
-          {% set display_status = 'user-action' %}
-          {% set status_label   = 'User Action' %}
+          {% set display_status = 'error' %}
+          {% set status_label   = 'Error' %}
         {% endif %}
 
         <tr data-status="{{ display_status }}"
@@ -237,6 +261,9 @@
           <td>{{ s.issue_title }}</td>
           <td>
             <span class="badge badge-{{ display_status }}">{{ status_label }}</span>
+            {% if s.error_message %}
+              <div style="font-size:0.7rem;color:#f87171;margin-top:0.3rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ s.error_message }}">{{ s.error_message[:80] }}</div>
+            {% endif %}
           </td>
           <td>
             {% if s.pr_url %}

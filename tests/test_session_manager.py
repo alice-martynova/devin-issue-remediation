@@ -51,6 +51,10 @@ class TestNormalizeStatus:
         ]:
             assert _normalize_status(transient) == "working", transient
 
+    def test_unknown_status_maps_to_error(self):
+        assert _normalize_status("some_future_state") == "error"
+        assert _normalize_status("") == "error"
+
 
 class TestExtractPrUrl:
     def test_pulls_html_url_from_pull_request_object(self):

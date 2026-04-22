@@ -18,10 +18,14 @@ from .github_client import GitHubClient
 from .session_manager import SessionManager
 
 _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
 logging.basicConfig(
-    level=getattr(logging, _log_level_name, logging.INFO),
+    level=_log_level,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
+# Third-party loggers that produce low-signal noise at any level.
+for _noisy in ("aiosqlite", "httpx", "httpcore", "uvicorn.access"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 def _require_env(name: str) -> str:

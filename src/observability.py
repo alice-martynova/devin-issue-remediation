@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import aiosqlite
@@ -9,7 +9,7 @@ import aiosqlite
 DB_PATH = os.getenv("DB_PATH", "/data/sessions.db")
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {"finished", "expired"}
+TERMINAL_STATUSES = {"finished", "expired", "error"}
 
 
 async def init_db() -> None:
@@ -21,12 +21,14 @@ async def init_db() -> None:
                 issue_title          TEXT NOT NULL,
                 issue_user           TEXT,
                 repo_full_name       TEXT NOT NULL,
-                devin_status         TEXT DEFAULT 'working',
+                devin_status         TEXT DEFAULT 'pending',
                 last_notified_status TEXT,
                 pr_url               TEXT,
                 pr_merged            INTEGER DEFAULT 0,
                 issue_closed         INTEGER DEFAULT 0,
                 devin_session_url    TEXT,
+                devin_commented      INTEGER DEFAULT 0,
+                error_message        TEXT,
                 created_at           TEXT NOT NULL,
                 updated_at           TEXT NOT NULL
             )
@@ -36,6 +38,8 @@ async def init_db() -> None:
             ("pr_merged", "INTEGER DEFAULT 0"),
             ("issue_user", "TEXT"),
             ("issue_closed", "INTEGER DEFAULT 0"),
+            ("devin_commented", "INTEGER DEFAULT 0"),
+            ("error_message", "TEXT"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {definition}")
@@ -43,15 +47,13 @@ async def init_db() -> None:
                 pass  # column already exists
 
         # Prevent duplicate active sessions for the same issue. Allow new
-        # sessions to be created once a prior one terminates (e.g. issue
-        # reopened after a PR was closed without merging).
+        # sessions to be created once a prior one terminates.
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_active_session_per_issue
             ON sessions (issue_number, repo_full_name)
-            WHERE devin_status NOT IN ('finished', 'expired')
+            WHERE devin_status NOT IN ('finished', 'expired', 'error')
         """)
 
-        # Dead-letter log for webhook handlers that threw before completing.
         await db.execute("""
             CREATE TABLE IF NOT EXISTS failed_webhooks (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +67,98 @@ async def init_db() -> None:
     logger.info(f"Database initialised at {DB_PATH}")
 
 
+async def record_pending_session(
+    placeholder_id: str,
+    issue_number: int,
+    issue_title: str,
+    issue_user: str,
+    repo_full_name: str,
+) -> bool:
+    """Insert a new session row in pending state before the Devin API call.
+
+    Returns True if inserted (this caller claimed the issue), False if an
+    active session for this (issue_number, repo_full_name) already exists
+    (concurrent webhook delivery or pre-existing session).
+    """
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT OR IGNORE INTO sessions
+                (session_id, issue_number, issue_title, issue_user, repo_full_name,
+                 devin_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (placeholder_id, issue_number, issue_title, issue_user,
+             repo_full_name, now, now),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def activate_pending_session(
+    placeholder_id: str,
+    session_id: str,
+    devin_session_url: str,
+) -> None:
+    """Transition a pending row to working once Devin has accepted the session."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE sessions
+            SET session_id = ?, devin_status = 'working',
+                devin_session_url = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (session_id, devin_session_url, now, placeholder_id),
+        )
+        await db.commit()
+
+
+async def set_session_error(session_id: str, error_message: str) -> None:
+    """Mark a session as errored (e.g. Devin API rejected the request)."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE sessions
+            SET devin_status = 'error', error_message = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (error_message, now, session_id),
+        )
+        await db.commit()
+
+
+async def update_devin_commented(session_id: str) -> None:
+    """Record that Devin has posted its first comment on the GitHub issue."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET devin_commented = 1, updated_at = ? WHERE session_id = ?",
+            (now, session_id),
+        )
+        await db.commit()
+
+
+async def get_stale_pending_sessions(threshold_minutes: int = 15) -> list[dict]:
+    """Return pending sessions older than threshold_minutes with no real session_id yet."""
+    cutoff = (datetime.utcnow() - timedelta(minutes=threshold_minutes)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE devin_status = 'pending' AND created_at < ?",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Legacy helper kept for backward compatibility and direct test use.
+# Production flow should use record_pending_session + activate_pending_session.
+# ---------------------------------------------------------------------------
 async def record_session(
     session_id: str,
     issue_number: int,
@@ -73,15 +167,10 @@ async def record_session(
     repo_full_name: str,
     devin_session_url: str,
 ) -> bool:
-    """Insert a new session row.
+    """Insert a session row directly in working state.
 
-    Returns True if a row was inserted (this caller claimed the issue), False
-    if an equivalent session already existed — either because the same
-    session_id was re-recorded (Devin idempotency) or because another active
-    session for this (issue_number, repo_full_name) tuple blocked the insert
-    via the partial unique index. Callers should use the return value to
-    decide whether to post first-touch side effects (e.g. the initial GitHub
-    comment) exactly once.
+    Returns True if inserted, False if a row for this (issue, repo) already
+    exists (same session_id re-recorded or concurrent webhook delivery).
     """
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -131,10 +220,15 @@ async def update_notified_status(session_id: str, status: str) -> None:
 async def get_active_session_by_issue(
     issue_number: int, repo_full_name: str
 ) -> Optional[dict]:
-    """Return the active (non-terminal) session for an issue, or None."""
+    """Return the active (non-terminal, non-pending) session for an issue, or None.
+
+    Excludes pending sessions since they have no real Devin session_id yet
+    and cannot receive relayed comments.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        placeholders = ",".join("?" * len(TERMINAL_STATUSES))
+        terminal = tuple(TERMINAL_STATUSES | {"pending"})
+        placeholders = ",".join("?" * len(terminal))
         cursor = await db.execute(
             f"""
             SELECT * FROM sessions
@@ -142,7 +236,7 @@ async def get_active_session_by_issue(
               AND devin_status NOT IN ({placeholders})
             LIMIT 1
             """,
-            (issue_number, repo_full_name, *TERMINAL_STATUSES),
+            (issue_number, repo_full_name, *terminal),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
@@ -166,10 +260,19 @@ async def get_session_by_pr_number(pr_number: int, repo_full_name: str) -> Optio
 
 
 async def session_exists_for_issue(issue_number: int, repo_full_name: str) -> bool:
+    """Return True only if there is a non-terminal active session for this issue.
+
+    Terminal sessions (finished, expired, error) are excluded so that a
+    reopened issue can spawn a new Devin session rather than being silently
+    skipped.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        skip = tuple(TERMINAL_STATUSES)
+        placeholders = ",".join("?" * len(skip))
         cursor = await db.execute(
-            "SELECT 1 FROM sessions WHERE issue_number = ? AND repo_full_name = ? LIMIT 1",
-            (issue_number, repo_full_name),
+            f"SELECT 1 FROM sessions WHERE issue_number = ? AND repo_full_name = ?"
+            f" AND devin_status NOT IN ({placeholders}) LIMIT 1",
+            (issue_number, repo_full_name, *skip),
         )
         return await cursor.fetchone() is not None
 
@@ -205,18 +308,32 @@ async def update_issue_closed(session_id: str) -> None:
 
 
 async def get_active_sessions() -> list[dict]:
-    """Returns sessions that still need Devin polling or PR merge checking."""
+    """Return sessions that need Devin polling or PR merge checking.
+
+    Includes:
+    - Non-terminal, non-pending sessions (active Devin sessions to poll).
+    - Expired sessions — Devin can resume after a quota increase.
+    - Finished sessions with no PR URL yet — keep retrying URL extraction.
+    - Terminal sessions with an unmerged PR (need merge status checked).
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        placeholders = ",".join("?" * len(TERMINAL_STATUSES))
+        # error and pending are hard stops: error is unrecoverable,
+        # pending has no real session_id to poll against.
+        hard_skip = tuple({"error", "pending"})
+        hard_skip_placeholders = ",".join("?" * len(hard_skip))
+        terminal = tuple(TERMINAL_STATUSES)
+        terminal_placeholders = ",".join("?" * len(terminal))
         cursor = await db.execute(
             f"""
             SELECT * FROM sessions
-            WHERE devin_status NOT IN ({placeholders})
-               OR (pr_url IS NOT NULL AND pr_merged = 0)
+            WHERE devin_status NOT IN ({hard_skip_placeholders})
+              AND NOT (devin_status = 'finished' AND pr_url IS NOT NULL AND pr_merged = 1)
+               OR (pr_url IS NOT NULL AND pr_merged = 0
+                   AND devin_status IN ({terminal_placeholders}))
             ORDER BY created_at DESC
             """,
-            tuple(TERMINAL_STATUSES),
+            (*hard_skip, *terminal),
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
@@ -270,4 +387,5 @@ async def get_metrics() -> dict:
         "prs_merged": sum(1 for s in sessions if s.get("pr_merged")),
         "blocked_count": by_status.get("blocked", 0),
         "expired_count": by_status.get("expired", 0),
+        "error_count": by_status.get("error", 0),
     }
